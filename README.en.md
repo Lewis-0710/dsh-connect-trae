@@ -4,6 +4,14 @@
 
 A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle plugin that connects locally signed-in Trae models to the DSH model picker, and exposes a read-only usage/credits overview.
 
+## Preview
+
+<p align="center">
+  <img src="docs/assets/dsh-connect-trae-usage-card.png" alt="DSH Connect Trae plugin card showing the current Trae account and credit summary" width="900">
+</p>
+
+<p align="center"><sub>Settings → Plugins → DSH Connect Trae: reads the currently signed-in Trae account and displays available, consumed, and total credits.</sub></p>
+
 ## Features
 
 - **Trae model provider** — registers locally signed-in Trae models as the `trae` provider (e.g. `DeepSeek-V4-Flash`, `DeepSeek-V4-Pro`).

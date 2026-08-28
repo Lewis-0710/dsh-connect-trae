@@ -21,6 +21,14 @@
 
 一个独立的 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle 插件。它把本机已登录的 Trae 账号通过新版 SOLO 远程会话通道接到 DSH 的模型选择器，并提供**只读**的用量/积分概览（`web_user_ent_usage`、每日签到、奖励活动）。
 
+## 效果预览
+
+<p align="center">
+  <img src="docs/assets/dsh-connect-trae-usage-card.png" alt="DSH Connect Trae 插件卡片：当前 Trae 账号登录状态与额度概览" width="900">
+</p>
+
+<p align="center"><sub>设置 → 插件配置 → DSH Connect Trae：读取当前登录的 Trae 账号并显示可用、消耗与合计额度。</sub></p>
+
 ## 功能特性
 
 - **Trae 模型接入** —— 把本机登录的 Trae 模型注册为 DSH 的 `trae` provider，模型选择器出现 `DeepSeek-V4-Flash`、`DeepSeek-V4-Pro` 等。

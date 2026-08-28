@@ -70,7 +70,7 @@ DshProject/
 - 发布记录：维护包内 `CHANGELOG.md`。
 - 发布流程：项目根目录维护 `RELEASING.md`，作为唯一权威发布说明。
 - npm 元数据：完整维护 description、keywords、author、license、repository、homepage、bugs、engines、exports、files、DSH bundle/client 声明。
-- 发布包白名单：通过 `files` 明确限定构建产物、图标、bundle patch、双语 README、CHANGELOG 和 LICENSE。
+- 发布包白名单：通过 `files` 明确限定构建产物、产品截图、bundle patch、双语 README、CHANGELOG、第三方声明和 LICENSE。
 - 发布前验证：测试、构建、`npm pack --dry-run`、版本与 CHANGELOG 核对。
 - 发布后验证：核对 npm `version` 与 `dist-tags.latest`，并验证 DSH 从 npm 安装后的实际加载。
 - GitHub 发布形态：使用版本提交和带说明的 annotated tag，tag 必须指向包含对应代码与版本号的提交。
