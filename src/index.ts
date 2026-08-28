@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
 import { TraeCredentialStore } from './auth.ts'
-import { TraeCatalog } from './catalog.ts'
+import { discoveredCatalog, FALLBACK_TRAE_MODELS, TraeCatalog, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential } from './refresh.ts'
 import { createTraeShim } from './shim.ts'
 import { TraeSoloRemoteClient } from './solo-remote.ts'
@@ -15,10 +15,11 @@ import { registerTraeUsageRoute } from './web-status.ts'
 
 export { createTraeAdapter, TRAE_PROVIDER, TRAE_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 export { normalizeTraeCredential, traeOwnAuthPath, TraeCredentialStore, type TraeCredential } from './auth.ts'
-export { FALLBACK_TRAE_MODELS, TraeCatalog, type TraeModelInfo } from './catalog.ts'
+export { discoveredCatalog, FALLBACK_TRAE_MODELS, TraeCatalog, type TraeModelInfo } from './catalog.ts'
 export { decryptTraeStorageValue, parseTraeAuthValue, parseTraeStorageDocument } from './decrypt.ts'
 export { identityHeaders, readTraeIdentity, type TraeIdentity } from './identity.ts'
 export { parseObservedModelConfig, type TraeObservedModelConfig } from './model-config.ts'
+export { parseTraeRemoteModel, type TraeDiscoveredModel, type TraeDiscoveredReasoning } from './model-metadata.ts'
 export { traeStorageCandidates, type TraeEdition, type TraeStorageCandidate } from './paths.ts'
 export { buildTraeAgentTaskBody, buildTraeCnHeaders, TRAE_CN_AGENT_TASK_PATH, TRAE_CN_TITLE_PATH, traeEndpoint } from './protocol.ts'
 export { buildTraeRawChatDraft, decodeRawChatChunk, TRAE_RAW_CHAT_V1_PATH, TRAE_RAW_CHAT_V2_PATH, type RawChatDelta, type RawChatMessage, type RawChatTool } from './raw-chat.ts'
@@ -42,15 +43,28 @@ export const TRAE_SETTINGS_NS = settingsNamespace('trae')
 export interface Config {
   authFile?: string
   edition?: 'auto' | 'cn' | 'sg' | 'solo' | 'solo-sg'
+  models?: TraeModelInfo[]
+  enabled1mModels?: string[]
 }
+
+const modelConfig = z.object({
+  id: z.string().required(),
+  name: z.string().required(),
+  contextWindow: z.number().step(1).min(1),
+  maxTokens: z.number().step(1).min(1),
+  input: z.array(z.union(['text', 'image'])),
+})
 
 export const Config: z<Config> = z.object({
   authFile: z.string().description('Optional Trae storage.json path override'),
   edition: z.union(['auto', 'cn', 'sg', 'solo', 'solo-sg']).default('auto').description('Trae edition hint'),
+  models: z.array(modelConfig).description('Trae models available to DSH') as z<TraeModelInfo[]>,
+  enabled1mModels: z.array(z.string()).default([]).description('Trae model ids whose verified 1M variants are enabled'),
 })
 
 export function apply(ctx: Context, config: Config): void {
   const catalog = new TraeCatalog()
+  const configuredModels = (value: Config): readonly TraeModelInfo[] => value.models?.length ? value.models : FALLBACK_TRAE_MODELS
   const store = new TraeCredentialStore({
     ...config.authFile === undefined ? {} : { storagePath: config.authFile },
     edition: config.edition ?? 'auto',
@@ -63,14 +77,29 @@ export function apply(ctx: Context, config: Config): void {
   // Read-only usage/credit summary served to the browser half. Optional on the
   // `webServer` seam; absent in headless runs, the host provider still works.
   const usageClient = new TraeUsageClient({ credential: () => store.resolve() })
-  ctx.inject(['webServer'], (webCtx) => registerTraeUsageRoute(webCtx, { store, client: usageClient }))
-
   let current = () => config
+  let invalidateAdapter = (): void => {}
+  const refreshModels = async (signal?: AbortSignal): Promise<readonly TraeModelInfo[]> => {
+    const discovered = await remote.fetchModels(signal)
+    const enabled1m = new Set(current().enabled1mModels ?? [])
+    const next = discoveredCatalog(discovered, enabled1m)
+    catalog.set(next)
+    invalidateAdapter()
+    return next
+  }
+  ctx.inject(['webServer'], (webCtx) => registerTraeUsageRoute(webCtx, {
+    store,
+    client: usageClient,
+    models: () => catalog.current(),
+    refreshModels,
+  }))
+
   installSettingsSection(ctx, TRAE_SETTINGS_NS, Config, config, {
     setSource(source) { current = source },
     onChange() {
       const next = current()
       store.setSource(next.authFile, next.edition ?? 'auto')
+      catalog.set(configuredModels(next))
     },
   })
 
@@ -82,24 +111,27 @@ export function apply(ctx: Context, config: Config): void {
 
   void shim.ready.then(() => {
     if (stopped) return
-    catalog.set([
-      { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 },
-      { id: 'DeepSeek-V4-Pro', name: 'DeepSeek-V4-Pro', contextWindow: 168_000, maxTokens: 32_000 },
-      { id: 'Doubao_1_6', name: 'Doubao-Seed-Code', contextWindow: 168_000, maxTokens: 32_000 },
-      { id: 'kimi-k2.6', name: 'Kimi-K2.6', contextWindow: 168_000, maxTokens: 32_000 },
-      { id: 'qwen-3.6-plus', name: 'Qwen3.6-Plus', contextWindow: 168_000, maxTokens: 32_000 },
-      { id: 'glm-5.1', name: 'GLM-5.1', contextWindow: 168_000, maxTokens: 32_000 },
-      { id: 'minimax-m2.7', name: 'MiniMax-M2.7', contextWindow: 168_000, maxTokens: 32_000 },
-    ])
+    catalog.set(configuredModels(current()))
     const trae = createTraeAdapter({
       shim,
       catalog,
       resolveAttachments: () => ctx.get('attachments'),
     })
+    invalidateAdapter = () => { trae.invalidate() }
     let releaseAdapter: (() => void) | undefined
     let releaseDirectory: (() => void) | undefined
     try {
       releaseAdapter = ctx.llm.registerAdapter([TRAE_PROVIDER], trae.adapter)
+      ctx.llm.registerModelDiscovery(TRAE_SETTINGS_NS, async (request) => {
+        if (request.provider !== TRAE_PROVIDER) return []
+        const next = await refreshModels(request.signal)
+        return next.map(model => ({
+          id: model.id,
+          name: model.name,
+          ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
+          ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
+        }))
+      })
       releaseDirectory = ctx.llm.registerConfigurableProviders([{
         provider: TRAE_PROVIDER,
         displayName: 'Trae',

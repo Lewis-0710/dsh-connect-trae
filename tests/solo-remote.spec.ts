@@ -30,7 +30,22 @@ describe('TraeSoloRemoteClient', () => {
     await expect(client.chat([{ role: 'user', content: 'hi' }], 'DeepSeek-V4-Flash')).rejects.toThrow(/session creation failed/)
   })
 
-  it('exposes the 13 evidenced SOLO models', async () => {
-    await expect(import('../src/solo-remote.ts')).resolves.toMatchObject({ TRAE_SOLO_REMOTE_MODELS: expect.anything() })
+  it('parses model capabilities from the preferred solo_agent_remote group', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ code: 0, data: { list: [
+      { function: 'solo_agent_remote', models: [{
+        name: 'qwen3.8-max', display_name: 'Qwen3.8-Max', multimodal: true, max_mode: true,
+        context_window_tokens: { dev: 200000, max: 1000000 },
+        reasoning_effort_config: { support_thinking: true, options: ['light', 'high', 'extra_high'], default_level: 'high' },
+        features: JSON.stringify({ consumption_rate: { enable: true, data: { rate: 1.5 } }, reasoning: { enable: true } }),
+      }] },
+      { function: 'solo_work_remote', models: [{ name: 'ignored' }] },
+    ] } }), { status: 200 }))
+    const client = new TraeSoloRemoteClient({ credential: async () => credential, fetchImpl: fetchImpl as unknown as typeof fetch })
+    await expect(client.fetchModels()).resolves.toEqual([{
+      id: 'qwen3.8-max', name: 'Qwen3.8-Max', multimodal: true,
+      contextWindow: 200000, maxContextWindow: 1000000, creditMultiplier: 1.5,
+      reasoningSupported: true,
+      reasoning: { supported: ['low', 'high', 'xhigh'], defaultEffort: 'high' },
+    }])
   })
 })

@@ -32,8 +32,9 @@ export class TraeSoloRemoteBridge implements TraeUpstreamClient {
       typeof message.role === 'string' && typeof message.content === 'string')
     if (messages.length === 0) return { ok: false, status: 400, kind: 'client', message: 'text messages are required' }
     const model = typeof parsed.model === 'string' && parsed.model !== '' ? parsed.model : 'DeepSeek-V4-Flash'
+    const upstreamModel = model.endsWith('@1m') ? model.slice(0, -3) : model
     try {
-      const result = await this.remote.chat(messages, model, signal)
+      const result = await this.remote.chat(messages, upstreamModel, signal)
       const chunks = buildOpenAISseChunks(result.content, model)
       const encoder = new TextEncoder()
       const stream = new ReadableStream<Uint8Array>({

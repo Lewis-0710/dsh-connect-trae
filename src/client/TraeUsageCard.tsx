@@ -10,7 +10,7 @@ import { createElement as h } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { TRAE_USAGE_PATH } from '../status-paths.ts'
+import { TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from '../status-paths.ts'
 import type { TraeWebUsage } from '../status-paths.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
@@ -19,6 +19,11 @@ import type { TraeSettingsKey } from './locales.ts'
 /** Localized copy injected by the browser-plugin registration. */
 export interface TraeUsageCardInjected {
   t: (key: TraeSettingsKey, params?: Record<string, unknown>) => string
+  settingsScope: {
+    getSnapshot(): { status: string; value?: unknown; writable: boolean }
+    subscribe(listener: () => void): () => void
+    set(field: string, value: unknown): Promise<void>
+  }
 }
 
 /** Props delivered by the Plugin configuration item slot. */
@@ -51,6 +56,15 @@ function formatDateTime(value: number): string {
   }).format(new Date(value))
 }
 
+function formatCapacity(value: number | undefined, unknown: string): string {
+  if (value === undefined) return unknown
+  if (value >= 1_000_000 && value % 1_000_000 === 0) return `${value / 1_000_000}M`
+  if (value >= 1_000 && value % 1_000 === 0) return `${value / 1_000}K`
+  return formatNumber(value)
+}
+
+const EFFORT_LABELS: Readonly<Record<string, string>> = { low: '轻', high: '高', xhigh: '极高' }
+
 function dotStyle(status: TraeWebUsage['status']): Record<string, string> {
   const color = status === 'signed-in'
     ? 'var(--dsw-alias-state-success-primary, #22a06b)'
@@ -61,17 +75,20 @@ function dotStyle(status: TraeWebUsage['status']): Record<string, string> {
 }
 
 /** Render Trae sign-in state and the total usage summary as one expandable card. */
-export function TraeUsageCard({ t }: TraeUsageCardProps) {
+export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   if (t === undefined) throw new Error('Trae usage card requires its translation function')
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<TraeWebUsage>({ status: 'signed-out' })
   const [busy, setBusy] = useState(false)
+  const [settingsRevision, setSettingsRevision] = useState(0)
   const mounted = useRef(true)
 
   useEffect(() => {
     mounted.current = true
     return () => { mounted.current = false }
   }, [])
+
+  useEffect(() => settingsScope?.subscribe(() => { setSettingsRevision(value => value + 1) }), [settingsScope])
 
   const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
     try {
@@ -114,6 +131,38 @@ export function TraeUsageCard({ t }: TraeUsageCardProps) {
     } finally {
       if (mounted.current) setBusy(false)
     }
+  }
+
+  const refreshModels = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const response = await fetch(TRAE_MODELS_REFRESH_PATH, {
+        method: 'POST',
+        headers: { accept: 'application/json' },
+        credentials: 'same-origin',
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      await refresh()
+    } catch (error: unknown) {
+      if (mounted.current) setStatus({ status: 'error', message: error instanceof Error ? error.message : t('row.requestFailed') })
+    } finally {
+      if (mounted.current) setBusy(false)
+    }
+  }
+
+  const settingsValue = settingsScope?.getSnapshot().value
+  const enabled1mModels = new Set(
+    typeof settingsValue === 'object' && settingsValue !== null && Array.isArray((settingsValue as { enabled1mModels?: unknown }).enabled1mModels)
+      ? (settingsValue as { enabled1mModels: unknown[] }).enabled1mModels.filter((value): value is string => typeof value === 'string')
+      : [],
+  )
+  void settingsRevision
+  const toggle1m = async (modelId: string): Promise<void> => {
+    if (settingsScope === undefined) return
+    const next = new Set(enabled1mModels)
+    if (!next.delete(modelId)) next.add(modelId)
+    await settingsScope.set('enabled1mModels', [...next])
+    await refreshModels()
   }
 
   const title = t('row.title')
@@ -190,6 +239,54 @@ export function TraeUsageCard({ t }: TraeUsageCardProps) {
                     )}
                     {status.creditsError === undefined ? null
                       : <p className="dsm-trae-usage-error">{t('row.creditsError', { message: status.creditsError })}</p>}
+                    <section className="dsm-trae-models" aria-label={t('row.modelsTitle')}>
+                      <div className="dsm-trae-models-head">
+                        <div>
+                          <h3 className="dsm-trae-models-title">{t('row.modelsTitle')}</h3>
+                          <p className="dsm-trae-models-summary">{t('row.modelsSummary', { count: status.models.length })}</p>
+                        </div>
+                        <button
+                          type="button"
+                          className="dsm-btn dsm-btn-outline"
+                          disabled={busy}
+                          onClick={() => { void refreshModels() }}
+                        >
+                          {busy ? t('row.modelsRefreshing') : t('row.modelsRefresh')}
+                        </button>
+                      </div>
+                      <div className="dsm-trae-model-list">
+                        {status.models.map(model => (
+                          <div className="dsm-trae-model" key={model.id}>
+                            <div className="dsm-trae-model-copy">
+                              <span className="dsm-trae-model-name">{model.name}</span>
+                              <span className="dsm-trae-model-id">{model.id}</span>
+                            </div>
+                            <div className="dsm-trae-model-meta">
+                              <span>{t('row.modelContext', { context: formatCapacity(model.contextWindow, t('row.modelUnknown')) })}</span>
+                              {model.maxTokens === undefined ? null
+                                : <span>{t('row.modelOutput', { output: formatCapacity(model.maxTokens, t('row.modelUnknown')) })}</span>}
+                              {model.creditMultiplier === undefined ? null
+                                : <span>{t('row.modelRate', { rate: model.creditMultiplier.toFixed(2) })}</span>}
+                              {model.maxContext === true ? <span>{t('row.modelMaxContext')}</span> : null}
+                              {model.reasoning !== undefined
+                                ? <span>{t('row.modelReasoning', { efforts: model.reasoning.supported.map(effort => EFFORT_LABELS[effort] ?? effort).join(' / ') })}</span>
+                                : model.reasoningSupported === true ? <span>{t('row.modelReasoningSupported')}</span> : null}
+                              {model.maxContextWindow === undefined || model.maxContext === true ? null
+                                : <label className="dsm-trae-model-toggle">
+                                    <input
+                                      type="checkbox"
+                                      checked={enabled1mModels.has(model.id)}
+                                      disabled={settingsScope === undefined || settingsScope.getSnapshot().writable !== true || busy}
+                                      onChange={() => { void toggle1m(model.id) }}
+                                    />
+                                    <span>{t('row.modelEnable1m')}</span>
+                                  </label>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="dsm-trae-model-capability-note">{t('row.modelCapabilityPending')}</p>
+                    </section>
                   </>
                 : null}
               {status.status === 'signed-out' ? <p className="dsm-trae-usage-text">{t('row.signedOutHint')}</p> : null}

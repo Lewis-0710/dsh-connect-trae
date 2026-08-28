@@ -37,10 +37,23 @@ function toPiModel(info: TraeModelInfo, baseUrl: string): Model<Api> {
     api: 'openai-completions',
     provider: TRAE_PROVIDER,
     baseUrl,
-    input: ['text'],
+    input: [...(info.input ?? ['text'])],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: info.contextWindow,
-    maxTokens: info.maxTokens,
+    reasoning: info.reasoningEfforts !== undefined,
+    ...(info.reasoningEfforts === undefined ? {} : {
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: info.reasoningEfforts.low ?? null,
+        medium: null,
+        high: info.reasoningEfforts.high ?? null,
+        xhigh: info.reasoningEfforts.xhigh ?? null,
+        max: null,
+      },
+    }),
+    ...(info.contextWindow === undefined ? {} : { contextWindow: info.contextWindow }),
+    ...(info.maxTokens === undefined ? {} : { maxTokens: info.maxTokens }),
+    compat: { supportsReasoningEffort: info.reasoningEfforts !== undefined },
   } as unknown as Model<Api>
 }
 

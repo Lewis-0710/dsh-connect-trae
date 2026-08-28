@@ -23,7 +23,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 /** Stable browser-plugin name. */
 export const name = 'dsh-connect-trae-client'
 /** Client services required by the Plugin configuration contribution. */
-export const inject = ['slots', 'locale']
+export const inject = ['slots', 'locale', 'settingsScope']
 
 /**
  * Register card copy and the Trae card under Plugin configuration.
@@ -43,11 +43,12 @@ export function apply(ctx: ClientContext): void {
     const namespace = 'settings.trae'
     ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-connect-trae: settings copy')
     const t = ctx.locale.bind(namespace) as TraeUsageCardInjected['t']
+    const settingsScope = ctx.settingsScope.bind({ namespace: 'trae' }) as NonNullable<TraeUsageCardInjected['settingsScope']>
     ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
       name: 'settings.plugin.item',
       key: 'trae',
       priority: 30,
-      inject: (): TraeUsageCardInjected => ({ t }),
+      inject: (): TraeUsageCardInjected => ({ t, settingsScope }),
     }, TraeUsageCard))
   } catch (error: unknown) {
     // Degrade silently on the page: the host provider still serves models.

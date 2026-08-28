@@ -13,8 +13,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { TraeCredentialStore } from './auth.ts'
+import type { TraeModelInfo } from './catalog.ts'
 import type { TraeUsageClient } from './usage.ts'
-import { TRAE_USAGE_PATH } from './status-paths.ts'
+import { TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from './status-paths.ts'
 import type { TraeWebCredits, TraeWebUsage } from './status-paths.ts'
 
 export { TRAE_USAGE_PATH } from './status-paths.ts'
@@ -24,6 +25,8 @@ export type { TraeWebUsage } from './status-paths.ts'
 export interface TraeUsageRouteOptions {
   store: TraeCredentialStore
   client: TraeUsageClient
+  models(): readonly TraeModelInfo[]
+  refreshModels?(signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
 }
 
 /** Redact token-like content before it crosses to the browser. */
@@ -77,6 +80,7 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWeb
   const account = {
     accountName: credential.accountName ?? credential.userId,
     tokenExpiresAtMs: credential.expiresAtMs,
+    models: deps.models().map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
   }
   try {
     const snapshot = await deps.client.snapshot()
@@ -89,7 +93,7 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWeb
 /** Mount the GET usage route on an optional webServer context. */
 export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions): void {
   ctx.effect(() => {
-    const dispose = ctx.webServer.register({
+    const disposeUsage = ctx.webServer.register({
       kind: 'exact',
       path: TRAE_USAGE_PATH,
       handler: async (req: IncomingMessage, res: ServerResponse) => {
@@ -108,8 +112,24 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         }
       },
     })
+    const disposeRefresh = ctx.webServer.register({
+      kind: 'exact',
+      path: TRAE_MODELS_REFRESH_PATH,
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
+        if (deps.refreshModels === undefined) return json(res, 503, { error: 'model refresh unavailable' })
+        try {
+          const models = await deps.refreshModels()
+          json(res, 200, { models })
+        } catch (error: unknown) {
+          json(res, 500, { error: safeMessage(error) })
+        }
+      },
+    })
     return () => {
-      dispose()
+      disposeRefresh()
+      disposeUsage()
     }
   }, 'dsh-connect-trae: Web usage route')
 }

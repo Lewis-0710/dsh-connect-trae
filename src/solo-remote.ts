@@ -1,4 +1,5 @@
 import type { TraeCredential } from './auth.ts'
+import { parseTraeRemoteModel, type TraeDiscoveredModel } from './model-metadata.ts'
 
 export const TRAE_SOLO_REMOTE_BASE = 'https://solo.trae.cn/api/remote/v1'
 
@@ -147,14 +148,22 @@ export class TraeSoloRemoteClient {
     throw new Error('SOLO remote polling timed out')
   }
 
-  async fetchModels(signal?: AbortSignal): Promise<{ id: string; name: string }[]> {
+  async fetchModels(signal?: AbortSignal): Promise<TraeDiscoveredModel[]> {
     const headers = await this.headers()
     const response = await this.fetchImpl(`${this.baseUrl}/models?functions=solo_agent_remote,solo_work_remote`, { headers, signal: signal ?? AbortSignal.timeout(30_000) })
     if (!response.ok) throw new Error(`SOLO remote models returned HTTP ${response.status}`)
-    const json = await response.json() as { code?: number; data?: { list?: { models?: { name?: string; display_name?: string }[] }[] } }
-    const models: { id: string; name: string }[] = []
-    for (const group of json.data?.list ?? []) for (const model of group.models ?? []) {
-      if (typeof model.name === 'string' && model.name !== '') models.push({ id: model.name.toLowerCase(), name: model.display_name ?? model.name })
+    const json = await response.json() as { code?: number; data?: { list?: { function?: string; models?: unknown[] }[] } }
+    // The two function groups largely overlap. Prefer solo_agent_remote and
+    // deduplicate by Trae's exact wire model name.
+    const groups = json.data?.list ?? []
+    const preferred = groups.find(group => group.function === 'solo_agent_remote') ?? groups[0]
+    const seen = new Set<string>()
+    const models: TraeDiscoveredModel[] = []
+    for (const raw of preferred?.models ?? []) {
+      const model = parseTraeRemoteModel(raw)
+      if (model === undefined || seen.has(model.id)) continue
+      seen.add(model.id)
+      models.push(model)
     }
     return models
   }

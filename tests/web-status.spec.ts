@@ -24,6 +24,9 @@ function makeRoute(options: { fetchImpl?: typeof fetch } = {}): TraeUsageRouteOp
       async resolve() { return credential },
     } as unknown as TraeUsageRouteOptions['store'],
     client,
+    models: () => [
+      { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 },
+    ],
   }
 }
 
@@ -61,7 +64,11 @@ describe('traeWebUsage', () => {
     const result = await traeWebUsage(deps)
     expect(result.status).toBe('signed-in')
     if (result.status !== 'signed-in') return
-    expect(result).toMatchObject({ accountName: 'LaoDing', tokenExpiresAtMs: expiresAtMs })
+    expect(result).toMatchObject({
+      accountName: 'LaoDing',
+      tokenExpiresAtMs: expiresAtMs,
+      models: [{ id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 }],
+    })
     expect(result.credits).toEqual({
       total: 7500,
       consumed: 5879.63,

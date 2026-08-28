@@ -6,6 +6,8 @@
 
 /** Plugin-owned usage endpoint consumed by its browser half. */
 export const TRAE_USAGE_PATH = '/plugins/dsh-connect-trae/usage'
+/** Plugin-owned live model refresh endpoint. */
+export const TRAE_MODELS_REFRESH_PATH = '/plugins/dsh-connect-trae/models/refresh'
 
 /** One credit pack and its remaining credit. */
 export interface TraeWebCreditAccount {
@@ -20,6 +22,25 @@ export interface TraeWebCredits {
   consumed: number
   available: number
   accounts: readonly TraeWebCreditAccount[]
+}
+
+/** Editable Trae model row rendered by the plugin-owned settings card. */
+export interface TraeWebModel {
+  id: string
+  name: string
+  contextWindow?: number
+  maxTokens?: number
+  input?: ('text' | 'image')[]
+  creditMultiplier?: number
+  reasoningSupported?: boolean
+  reasoning?: {
+    supported: string[]
+    defaultEffort?: string
+  }
+  baseModelId?: string
+  maxContext?: boolean
+  maxContextWindow?: number
+  maxContextEnabled?: boolean
 }
 
 /** Daily check-in status rendered by the card. */
@@ -43,6 +64,7 @@ export type TraeWebUsage =
     status: 'signed-in'
     accountName: string
     tokenExpiresAtMs: number
+    models: readonly TraeWebModel[]
     credits?: TraeWebCredits
     creditsError?: string
   }
