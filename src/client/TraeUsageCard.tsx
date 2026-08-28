@@ -45,6 +45,12 @@ function formatNumber(value: number): string {
   return new Intl.NumberFormat(undefined).format(value)
 }
 
+function formatDateTime(value: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(value))
+}
+
 function dotStyle(status: TraeWebUsage['status']): Record<string, string> {
   const color = status === 'signed-in'
     ? 'var(--dsw-alias-state-success-primary, #22a06b)'
@@ -112,7 +118,7 @@ export function TraeUsageCard({ t }: TraeUsageCardProps) {
 
   const title = t('row.title')
   const label = status.status === 'signed-in'
-    ? t('row.signedIn')
+    ? t('row.signedIn', { accountName: status.accountName })
     : status.status === 'error'
       ? t('row.requestFailed')
       : t('row.signedOut')
@@ -142,9 +148,16 @@ export function TraeUsageCard({ t }: TraeUsageCardProps) {
         {open
           ? <div className="dsm-trae-usage">
               <div className="dsm-trae-usage-account">
-                <div className="dsm-trae-usage-status" role="status">
-                  <span aria-hidden="true" className="dsm-trae-usage-dot" style={dotStyle(status.status)} />
-                  <span>{label}</span>
+                <div className="dsm-trae-usage-account-copy" role="status">
+                  <div className="dsm-trae-usage-status">
+                    <span aria-hidden="true" className="dsm-trae-usage-dot" style={dotStyle(status.status)} />
+                    <span>{label}</span>
+                  </div>
+                  {status.status === 'signed-in'
+                    ? <span className="dsm-trae-usage-expiry">
+                        {t('row.tokenExpiry', { expiresAt: formatDateTime(status.tokenExpiresAtMs) })}
+                      </span>
+                    : null}
                 </div>
                 <button
                   type="button"

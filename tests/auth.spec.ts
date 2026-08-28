@@ -17,9 +17,9 @@ function storage(token: string, expiresAt: number, refreshExpiresAt = Date.now()
 async function temp(): Promise<string> { const dir = await mkdtemp(join(tmpdir(), 'trae-auth-')); cleanup.push(dir); return dir }
 
 describe('Trae credential normalization', () => {
-  it('normalizes ISO and numeric expiries without exposing account fields', () => {
-    expect(normalizeTraeCredential({ token: 'at', expiredAt: '2030-01-01T00:00:00.000Z', account: { name: 'private' } }, 'cn', 'desktop')).toMatchObject({
-      accessToken: 'at', edition: 'cn', source: 'desktop', expiresAtMs: Date.parse('2030-01-01T00:00:00.000Z'),
+  it('normalizes ISO and numeric expiries while exposing only the display username', () => {
+    expect(normalizeTraeCredential({ token: 'at', expiredAt: '2030-01-01T00:00:00.000Z', account: { username: 'LaoDing', email: 'private@example.com' } }, 'cn', 'desktop')).toMatchObject({
+      accessToken: 'at', accountName: 'LaoDing', edition: 'cn', source: 'desktop', expiresAtMs: Date.parse('2030-01-01T00:00:00.000Z'),
     })
     expect(normalizeTraeCredential({}, 'cn', 'desktop')).toBeUndefined()
   })

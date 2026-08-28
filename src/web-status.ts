@@ -71,11 +71,18 @@ function toCredits(snapshot: { summary: { totalAmount: number; consumedAmount: n
 export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWebUsage> {
   const authStatus = await deps.store.status()
   if (authStatus.state !== 'signed-in') return { status: 'signed-out' }
+  const credential = await deps.store.resolve()
+  // Only user-facing identity and expiry cross to the browser. Token material
+  // and stable user IDs stay on the Host.
+  const account = {
+    accountName: credential.accountName ?? credential.userId,
+    tokenExpiresAtMs: credential.expiresAtMs,
+  }
   try {
     const snapshot = await deps.client.snapshot()
-    return { status: 'signed-in', credits: toCredits(snapshot) }
+    return { status: 'signed-in', ...account, credits: toCredits(snapshot) }
   } catch (error: unknown) {
-    return { status: 'signed-in', creditsError: safeMessage(error) }
+    return { status: 'signed-in', ...account, creditsError: safeMessage(error) }
   }
 }
 

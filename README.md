@@ -81,6 +81,10 @@ pnpm run check   # typecheck + test + build
 dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
 ```
 
+## 致谢
+
+- [Wang-JQ77/dsh-trae-api](https://github.com/Wang-JQ77/dsh-trae-api)（MIT）— Trae 认证、会话和模型协议研究的参照实现。
+
 ## 第三方开源依赖
 
 本项目参考的与 Trae 接入直接相关的开源项目，以及它们的许可证与合规说明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。引入新的 Trae 相关外部依赖或复用其他项目代码时，请同步更新该文件并遵守对应许可证要求。

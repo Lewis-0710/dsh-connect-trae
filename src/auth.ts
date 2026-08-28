@@ -9,6 +9,7 @@ export interface TraeCredential {
   accessToken: string
   refreshToken?: string
   userId: string
+  accountName?: string
   host: string
   expiresAtMs: number
   refreshExpiresAtMs?: number
@@ -60,10 +61,15 @@ export function normalizeTraeCredential(raw: unknown, edition: TraeEdition, sour
   const expiresAtMs = timeToMs(value['expiredAt'] ?? value['expiresAt']) ?? 0
   const refreshExpiresAtMs = timeToMs(value['refreshExpiredAt'] ?? value['refreshExpiresAt'])
   const refreshToken = optionalString(value['refreshToken'])
+  const account = typeof value['account'] === 'object' && value['account'] !== null && !Array.isArray(value['account'])
+    ? value['account'] as Record<string, unknown>
+    : undefined
+  const accountName = optionalString(account?.['username'])
   return {
     accessToken,
     ...refreshToken === undefined ? {} : { refreshToken },
     userId: optionalString(value['userId']) ?? '',
+    ...accountName === undefined ? {} : { accountName },
     host: optionalString(value['host']) ?? '',
     expiresAtMs,
     ...refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs },
@@ -81,6 +87,7 @@ function parseOwn(text: string): TraeCredential | undefined {
     if (edition !== 'cn' && edition !== 'sg' && edition !== 'solo' && edition !== 'solo-sg') return undefined
     return normalizeTraeCredential({
       token: stored['accessToken'], refreshToken: stored['refreshToken'], userId: stored['userId'], host: stored['host'],
+      account: stored['accountName'] === undefined ? undefined : { username: stored['accountName'] },
       expiredAt: stored['expiresAtMs'], refreshExpiredAt: stored['refreshExpiresAtMs'],
     }, edition, 'dsh')
   } catch { return undefined }

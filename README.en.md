@@ -62,6 +62,10 @@ Local dev via a `link:` install to the desktop profile (restart DSH Desktop afte
 dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
 ```
 
+## Acknowledgements
+
+- [Wang-JQ77/dsh-trae-api](https://github.com/Wang-JQ77/dsh-trae-api) (MIT) — Reference implementation for research into Trae authentication, sessions, and model protocols.
+
 ## Third-party open-source dependencies
 
 The open-source projects referenced for Trae integration (architecture/protocol research), together with their licenses and compliance notes, are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). When introducing new Trae-related external dependencies or reusing code from other projects, update that file accordingly and honor the upstream licenses.

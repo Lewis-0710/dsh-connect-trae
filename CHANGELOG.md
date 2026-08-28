@@ -5,7 +5,7 @@
 ### Features
 
 - 首个稳定版本：将本机当前登录的 Trae 模型接入 DSH，并通过安全 loopback shim 提供模型调用。
-- 提供 DSH Connect Trae 插件卡片，展示当前登录账号的可用额度、已消耗额度和总额度；卡片底部提供「鼓励一下 ★」GitHub 链接。
+- 提供 DSH Connect Trae 插件卡片，展示当前登录账号名、访问令牌过期时间、可用额度、已消耗额度和总额度；卡片底部提供「鼓励一下 ★」GitHub 链接。
 - 支持 Trae SOLO 远程会话、模型目录、只读用量接口及中英文界面。
 
 ### Fixes

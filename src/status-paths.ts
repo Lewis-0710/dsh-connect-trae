@@ -41,6 +41,8 @@ export type TraeWebUsage =
   | { status: 'signed-out' }
   | {
     status: 'signed-in'
+    accountName: string
+    tokenExpiresAtMs: number
     credits?: TraeWebCredits
     creditsError?: string
   }

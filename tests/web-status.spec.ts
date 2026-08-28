@@ -4,11 +4,13 @@ import { TraeUsageClient, type TraeUsageOptions } from '../src/usage.ts'
 import type { TraeUsageRouteOptions } from '../src/web-status.ts'
 import { traeWebUsage } from '../src/web-status.ts'
 
+const expiresAtMs = Date.now() + 60_000
 const credential: TraeCredential = {
   accessToken: 'eyJhbGciOiJSUzI1NiJ9.signature',
   userId: 'uid',
+  accountName: 'LaoDing',
   host: 'https://api.trae.cn',
-  expiresAtMs: Date.now() + 1000,
+  expiresAtMs,
   edition: 'solo',
   source: 'desktop',
 }
@@ -59,6 +61,7 @@ describe('traeWebUsage', () => {
     const result = await traeWebUsage(deps)
     expect(result.status).toBe('signed-in')
     if (result.status !== 'signed-in') return
+    expect(result).toMatchObject({ accountName: 'LaoDing', tokenExpiresAtMs: expiresAtMs })
     expect(result.credits).toEqual({
       total: 7500,
       consumed: 5879.63,

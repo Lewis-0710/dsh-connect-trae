@@ -28,6 +28,8 @@ export const TRAE_CARD_CSS = `
 .dsm-btn-primary:hover:not(:disabled){opacity:.9}
 .dsm-trae-usage{display:flex;flex-direction:column;gap:16px;margin:0;padding:14px 0 4px}
 .dsm-trae-usage-account{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.dsm-trae-usage-account-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.dsm-trae-usage-expiry{padding-left:19px;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px}
 .dsm-trae-usage-list{display:flex;flex-direction:column;gap:10px}
 .dsm-trae-usage-text{margin:0;font-size:14px;line-height:22px;color:var(--dsw-alias-label-secondary,#b8b8b8)}
 .dsm-trae-usage-error{margin:0;font-size:14px;line-height:22px;color:var(--dsw-alias-state-error-primary,#ef4444)}
