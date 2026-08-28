@@ -15,3 +15,4 @@
 
 - 新增 `docs/SOLO_ROUTE_DECISION.md`、`docs/USAGE_API_RESEARCH.md`、`docs/HANDOFF.md`。
 - README 中英双语双文件，对齐插件外部形象标准。
+- 新增 `THIRD_PARTY_NOTICES.md` 第三方开源声明：记录直接依赖与架构/协议参考项目的许可证与合规说明；README 增加对应章节，发布包 `files` 白名单纳入该文件。

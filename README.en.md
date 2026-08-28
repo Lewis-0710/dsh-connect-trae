@@ -54,6 +54,10 @@ Local dev via a `link:` install to the desktop profile (restart DSH Desktop afte
 dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
 ```
 
+## Third-party open-source dependencies
+
+Direct npm dependencies and the open-source projects referenced for architecture/protocol research, together with their licenses and compliance notes, are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). When introducing new external dependencies or reusing code from other projects, update that file accordingly and honor the upstream licenses.
+
 ## License
 
 [MIT](LICENSE)

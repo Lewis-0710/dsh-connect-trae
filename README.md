@@ -73,6 +73,10 @@ pnpm run check   # typecheck + test + build
 dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
 ```
 
+## 第三方开源依赖
+
+本项目使用到的直接依赖（npm 包）与架构/协议参考的开源项目，以及它们的许可证与合规说明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。引入新的外部依赖或复用其他项目代码时，请同步更新该文件并遵守对应许可证要求。
+
 ## 许可证
 
 [MIT](LICENSE)
