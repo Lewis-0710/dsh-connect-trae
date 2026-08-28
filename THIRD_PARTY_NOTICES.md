@@ -8,12 +8,11 @@
 
 | 参考项目 | 仓库 | 参考内容 | 许可证 |
 | --- | --- | --- | --- |
-| `dsh-workbuddy-connect` | <https://github.com/corrinehu/dsh-workbuddy-connect> | Trae 接入的 DSH Provider 架构参考：loopback shim 安全骨架、web-status 只读路由模式、浏览器插件入口模式（见 `src/shim.ts`、`src/web-status.ts`、`src/status-paths.ts`、`src/client/index.tsx` 注释） | MIT |
 | `dsh-trae-api` | <https://github.com/Wang-JQ77/dsh-trae-api> | Trae 上游协议（认证、会话、模型目录）的参考与失败样本分析（见 `docs/ANALYSIS.md`、`docs/ANALYSIS_CONCLUSION.md`、`docs/SOLO_ROUTE_DECISION.md`） | MIT |
 | `laojichao/trae-local-api` | <https://github.com/laojichao/trae-local-api> | `dsh-trae-api` 的直接上游，仅作为 Trae 协议调研线索，本项目未复用其代码（见 `docs/SOLO_ROUTE_DECISION.md`） | 未声明（保留所有权利） |
 
 ## 合规说明
 
-- `dsh-workbuddy-connect` 与 `dsh-trae-api` 使用 **MIT** 宽松许可，与项目自身的 MIT 许可证兼容；`laojichao/trae-local-api` 未声明许可证（保留所有权利），本项目仅将其作为协议调研线索，未复制、修改或分发其代码。
+- `dsh-trae-api` 使用 **MIT** 宽松许可，与项目自身的 MIT 许可证兼容；`laojichao/trae-local-api` 未声明许可证（保留所有权利），本项目仅将其作为协议调研线索，未复制、修改或分发其代码。
 - MIT 许可要求保留上游版权声明。本项目**不重新打包或再分发**上述参考项目的源码，仅参考其架构思路与协议信息；`docs/` 中的分析文档亦为独立撰写。
 - 若后续引入新的与 Trae 接入相关的依赖或复用其他项目的代码，必须在引入时同步更新本文件，并遵守对应许可证的署名与声明要求。
