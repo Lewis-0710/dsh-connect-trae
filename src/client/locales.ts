@@ -19,6 +19,7 @@ export const en = {
   'row.creditsError': 'Usage unavailable: {message}',
   'row.refresh': 'Refresh',
   'row.refreshing': 'Refreshing…',
+  'row.cheer': 'Star on GitHub',
 } as const
 
 export type TraeSettingsKey = keyof typeof en
@@ -38,4 +39,5 @@ export const zh: Record<TraeSettingsKey, string> = {
   'row.creditsError': '用量查询失败：{message}',
   'row.refresh': '刷新',
   'row.refreshing': '正在刷新…',
+  'row.cheer': '鼓励一下',
 }

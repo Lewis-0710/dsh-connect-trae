@@ -27,6 +27,7 @@ export type TraeUsageCardProps =
   & Partial<TraeUsageCardInjected>
 
 const POLL_INTERVAL_MS = 60_000
+const TRAE_GITHUB_URL = 'https://github.com/dingminhua/dsh-connect-trae'
 
 /** Inject the shared card CSS once. */
 if (typeof document !== 'undefined') {
@@ -180,6 +181,19 @@ export function TraeUsageCard({ t }: TraeUsageCardProps) {
                 : null}
               {status.status === 'signed-out' ? <p className="dsm-trae-usage-text">{t('row.signedOutHint')}</p> : null}
               {status.status === 'error' ? <p className="dsm-trae-usage-error">{status.message}</p> : null}
+              <div className="dsm-trae-usage-footer">
+                <div className="dsm-trae-usage-footer-left">
+                  <a
+                    className="dsm-trae-usage-cheer"
+                    href={TRAE_GITHUB_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {t('row.cheer')}
+                    <span className="dsm-trae-usage-cheer-star" aria-hidden="true">★</span>
+                  </a>
+                </div>
+              </div>
             </div>
           : null}
       </div>

@@ -37,4 +37,10 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-usage-stat{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 8px;border:1px solid var(--dsw-alias-border-l2,#36373b);border-radius:10px;background:var(--dsw-alias-bg-layer-2,#232529);min-width:0}
 .dsm-trae-usage-stat-label{font-size:12px;line-height:18px;color:var(--dsw-alias-label-tertiary,#999)}
 .dsm-trae-usage-stat-value{font-size:16px;line-height:22px;font-weight:600;color:var(--dsw-alias-label-primary,#e6e6e6);white-space:nowrap}
+.dsm-trae-usage-footer{display:flex;align-items:center;border-top:1px solid var(--dsw-alias-border-l2,#36373b);padding-top:12px}
+.dsm-trae-usage-footer-left{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.dsm-trae-usage-cheer{display:inline-flex;align-items:center;gap:4px;flex:none;text-decoration:underline;text-underline-offset:2px;color:var(--dsw-alias-label-tertiary,#999);font-size:13px;line-height:1.5;transition:color .16s}
+.dsm-trae-usage-cheer-star{font-size:12px;line-height:1;display:inline-flex}
+.dsm-trae-usage-cheer:hover{color:var(--dsw-alias-label-primary,#e6e6e6)}
+.dsm-trae-usage-cheer:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#5686fe);outline-offset:2px}
 `
