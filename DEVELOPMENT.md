@@ -30,10 +30,10 @@ DshProject/
 
 ## 开源合规要求
 
-本项目参考/依赖了上述及其他开源项目，必须遵守各自的许可证规范：
+本项目参考了上述与 Trae 接入直接相关的开源项目，必须遵守各自的许可证规范：
 
-- **依赖与参考项目清单**：见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，包含直接 npm 依赖与架构/协议参考项目的许可证说明。
-- **引入新依赖时**：必须在 `THIRD_PARTY_NOTICES.md` 中登记其名称、用途与许可证，并随包携带上游 LICENSE（直接依赖随 npm 安装自带；若手工引入第三方源码，需将许可证文本一并纳入项目）。
+- **Trae 相关参考项目清单**：见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，包含与 Trae 接入直接相关的架构/协议参考项目的许可证说明。
+- **引入新的 Trae 相关依赖时**：必须在 `THIRD_PARTY_NOTICES.md` 中登记其名称、用途与许可证，并随包携带上游 LICENSE（直接依赖随 npm 安装自带；若手工引入第三方源码，需将许可证文本一并纳入项目）。
 - **复用参考项目代码时**：本项目当前仅借鉴架构思路、不整体复制源码（关键模块均为独立实现并在注释中标注参考来源）。若未来改为直接复制或派生某个上游文件的代码，须保留该文件的版权声明与许可证头，并在 `THIRD_PARTY_NOTICES.md` 中注明。
 - **发布时**：`package.json` 的 `files` 白名单已包含 `THIRD_PARTY_NOTICES.md`，第三方声明随 npm 包一起分发。
 

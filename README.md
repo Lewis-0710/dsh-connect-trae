@@ -25,7 +25,7 @@
 
 - **Trae 模型接入** —— 把本机登录的 Trae 模型注册为 DSH 的 `trae` provider，模型选择器出现 `DeepSeek-V4-Flash`、`DeepSeek-V4-Pro` 等。
 - **新版 SOLO 远程会话** —— 走 `solo.trae.cn/api/remote/v1` 通道创建会话并轮询最终回答。
-- **只读用量概览** —— 插件设置面板（设置 → 插件配置 → DSH Trae Connect）里展开卡片即可查看总可用额度、各项积分来源（老用户/签到/登录赠送）、每日签到状态与奖励活动规则；只读、不消耗 Trae 积分。
+- **只读用量概览** —— 插件设置面板（设置 → 插件配置 → DSH Connect Trae）里展开卡片即可查看总可用额度、各项积分来源（老用户/签到/登录赠送）、每日签到状态与奖励活动规则；只读、不消耗 Trae 积分。
 - **安全 loopback shim** —— 随机端口 + 进程内随机 secret，真实 Trae token 不交给 pi-ai。
 
 ## 工作原理
@@ -75,7 +75,7 @@ dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
 
 ## 第三方开源依赖
 
-本项目使用到的直接依赖（npm 包）与架构/协议参考的开源项目，以及它们的许可证与合规说明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。引入新的外部依赖或复用其他项目代码时，请同步更新该文件并遵守对应许可证要求。
+本项目参考的与 Trae 接入直接相关的开源项目，以及它们的许可证与合规说明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。引入新的 Trae 相关外部依赖或复用其他项目代码时，请同步更新该文件并遵守对应许可证要求。
 
 ## 许可证
 

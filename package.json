@@ -1,6 +1,6 @@
 {
   "name": "dsh-connect-trae",
-  "displayName": "DSH Trae Connect",
+  "displayName": "DSH Connect Trae",
   "description": "Connect locally signed-in Trae models to DeepSeek Harness, plus a read-only usage/credits summary.",
   "version": "0.1.0-dev.1",
   "author": "dingminhua",

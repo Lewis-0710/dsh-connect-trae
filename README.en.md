@@ -8,7 +8,7 @@ A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bund
 
 - **Trae model provider** — registers locally signed-in Trae models as the `trae` provider (e.g. `DeepSeek-V4-Flash`, `DeepSeek-V4-Pro`).
 - **New SOLO remote sessions** — creates a session and polls the final answer over `solo.trae.cn/api/remote/v1`.
-- **Read-only usage overview** — expand the card in Plugin configuration (Settings → Plugins → DSH Trae Connect) to see total available credits, per-pack sources (legacy, check-in, monthly bonus), daily check-in status, and reward activity rules. Read-only; does not consume Trae credits.
+- **Read-only usage overview** — expand the card in Plugin configuration (Settings → Plugins → DSH Connect Trae) to see total available credits, per-pack sources (legacy, check-in, monthly bonus), daily check-in status, and reward activity rules. Read-only; does not consume Trae credits.
 - **Secure loopback shim** — random port + in-process random secret; the real Trae token is never handed to pi-ai.
 
 ## How it works
@@ -56,7 +56,7 @@ dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
 
 ## Third-party open-source dependencies
 
-Direct npm dependencies and the open-source projects referenced for architecture/protocol research, together with their licenses and compliance notes, are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). When introducing new external dependencies or reusing code from other projects, update that file accordingly and honor the upstream licenses.
+The open-source projects referenced for Trae integration (architecture/protocol research), together with their licenses and compliance notes, are recorded in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). When introducing new Trae-related external dependencies or reusing code from other projects, update that file accordingly and honor the upstream licenses.
 
 ## License
 

@@ -239,7 +239,7 @@ dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
   - 插件的两个对外展示面 = ①插件设置卡片（用量）+ ②模型选择器（trae provider）
 - 对外形象已对齐：README 双语、CHANGELOG、RELEASING、LICENSE、CI、package.json 元数据。
 
-> ⚠️ 卡片是新增的 client 端，已安装到 desktop profile 的 link 版本需要**重启 DSH Desktop** 才能在「插件配置」里看到「DSH Trae Connect」卡片并展示用量。
+> ⚠️ 卡片是新增的 client 端，已安装到 desktop profile 的 link 版本需要**重启 DSH Desktop** 才能在「插件配置」里看到「DSH Connect Trae」卡片并展示用量。
 
 ## 文档索引
 

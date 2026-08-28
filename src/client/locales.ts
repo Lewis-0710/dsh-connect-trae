@@ -5,7 +5,7 @@
  */
 
 export const en = {
-  'row.title': 'DSH Trae Connect',
+  'row.title': 'Trae credits & models (DSH Connect Trae)',
   'row.desc': 'Use the models in the Trae desktop app directly in DSH, and see your remaining credits at a glance.',
   'row.expand': 'Expand',
   'row.collapse': 'Collapse',
@@ -24,7 +24,7 @@ export const en = {
 export type TraeSettingsKey = keyof typeof en
 
 export const zh: Record<TraeSettingsKey, string> = {
-  'row.title': 'DSH Trae Connect',
+  'row.title': '接入使用Trae积分与模型（DSH Connect Trae）',
   'row.desc': '在 DSH 中直接使用 Trae 桌面 App 包含的模型，并随时查看剩余积分。',
   'row.expand': '展开',
   'row.collapse': '收起',
