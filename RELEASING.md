@@ -49,7 +49,7 @@ git push origin vX.Y.Z
 npm publish
 ```
 
-**打包内容**：`package.json` 的 `files` 字段已限定只发布 `lib/`、`docs/assets/dsh-connect-trae-usage-card.png`、`cordis.patch.yml`、`README.md`、`README.en.md`、`CHANGELOG.md`、`THIRD_PARTY_NOTICES.md`、`LICENSE`，`tests/` 和 `node_modules/` 不会进入发布包。
+**打包内容**：`package.json` 的 `files` 字段已限定只发布 `lib/`、`docs/assets/dsh-connect-trae-usage-card.png`、`screenshots.json`、`cordis.patch.yml`、`README.md`、`README.en.md`、`CHANGELOG.md`、`THIRD_PARTY_NOTICES.md`、`LICENSE`，`tests/` 和 `node_modules/` 不会进入发布包。
 
 **发布前检查**（可选但推荐）：
 

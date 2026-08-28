@@ -32,6 +32,7 @@
   "files": [
     "lib",
     "docs/assets/dsh-connect-trae-usage-card.png",
+    "screenshots.json",
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
