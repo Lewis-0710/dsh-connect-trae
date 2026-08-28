@@ -118,9 +118,10 @@ export class TraeCredentialStore {
 
   async current(): Promise<TraeCredential | undefined> {
     const [desktop, own] = await Promise.all([this.readDesktop(), this.readOwn()])
-    if (desktop === undefined) return own
-    if (own === undefined) return desktop
-    return own.expiresAtMs > desktop.expiresAtMs ? own : desktop
+    // Prefer the desktop credential: it is the account currently signed in to
+    // the Trae client, so usage/credits always reflect what the user sees.
+    // The own cache is only a fallback when no desktop credential is present.
+    return desktop ?? own
   }
 
   async resolve(): Promise<TraeCredential> {

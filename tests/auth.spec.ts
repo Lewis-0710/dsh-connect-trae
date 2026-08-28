@@ -47,6 +47,20 @@ describe('TraeCredentialStore', () => {
     expect(JSON.parse(await readFile(own, 'utf8')).credential.accessToken).toBe('fresh')
   })
 
+  it('prefers the desktop credential even when the own cache expires later', async () => {
+    const dir = await temp(); const file = join(dir, 'storage.json'); const own = join(dir, 'own.json')
+    await writeFile(file, storage('desktop', Date.now() + 3_600_000))
+    await writeFile(own, JSON.stringify({ version: 1, credential: {
+      accessToken: 'stale-own', refreshToken: 'rt', userId: 'old', host: 'https://api.trae.cn',
+      expiresAtMs: Date.now() + 86_400_000, source: 'dsh', edition: 'cn',
+    } }))
+    const store = new TraeCredentialStore({ storagePath: file, edition: 'cn', ownPath: own, refresh: async () => { throw new Error('unused') } })
+    // The desktop credential (the account currently signed in to Trae) must win,
+    // even though the own cache has a later expiry: the plugin should always
+    // follow the account the user is logged into right now.
+    await expect(store.current()).resolves.toMatchObject({ accessToken: 'desktop', source: 'desktop' })
+  })
+
   it('uses a still-valid token when refresh fails and rejects an expired refresh token', async () => {
     const dir = await temp(); const fresh = join(dir, 'fresh.json'); const expired = join(dir, 'expired.json')
     await writeFile(fresh, storage('usable', Date.now() + 60_000))
