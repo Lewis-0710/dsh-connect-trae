@@ -60,4 +60,4 @@ The open-source projects referenced for Trae integration (architecture/protocol 
 
 ## License
 
-[MIT](LICENSE)
+This project is licensed under the [MIT License](LICENSE). Copyright: **Copyright (c) 2026 LaoDing**.

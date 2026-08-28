@@ -11,12 +11,15 @@
 
 ## 每次发布的完整步骤
 
-### 1. 确认代码与测试
+### 1. 确认代码、测试与版权
 
 ```bash
 cd /Users/dmh2002/DshProject/dsh-connect-trae
 pnpm run check        # typecheck + test + build，应全部通过
+grep -F "Copyright (c) 2026 LaoDing" LICENSE
 ```
+
+> 本项目以 MIT 许可证发布，版权归属必须保持为 **LaoDing**；发布前不得把 LICENSE 中的版权主体改成 npm 账号、GitHub 账号或其他名称。
 
 ### 2. 更新版本号
 

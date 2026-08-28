@@ -79,4 +79,4 @@ dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
 
 ## 许可证
 
-[MIT](LICENSE)
+本项目采用 [MIT](LICENSE) 许可证，版权归属：**Copyright (c) 2026 LaoDing**。
