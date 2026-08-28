@@ -1,0 +1,59 @@
+# dsh-connect-trae
+
+[English](README.en.md) | 中文
+
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle plugin that connects locally signed-in Trae models to the DSH model picker, and exposes a read-only usage/credits overview.
+
+## Features
+
+- **Trae model provider** — registers locally signed-in Trae models as the `trae` provider (e.g. `DeepSeek-V4-Flash`, `DeepSeek-V4-Pro`).
+- **New SOLO remote sessions** — creates a session and polls the final answer over `solo.trae.cn/api/remote/v1`.
+- **Read-only usage overview** — expand the card in Plugin configuration (Settings → Plugins → DSH Trae Connect) to see total available credits, per-pack sources (legacy, check-in, monthly bonus), daily check-in status, and reward activity rules. Read-only; does not consume Trae credits.
+- **Secure loopback shim** — random port + in-process random secret; the real Trae token is never handed to pi-ai.
+
+## How it works
+
+```text
+DSH PiAiAdapter
+  -> secure loopback shim
+  -> TraeSoloRemoteBridge
+  -> TraeSoloRemoteClient
+  -> https://solo.trae.cn/api/remote/v1/chat_sessions
+  -> poll /chat_sessions/:id/messages
+  -> extract final answer -> OpenAI SSE -> DSH
+```
+
+Usage overview hits the read-only `https://api.trae.cn/trae/api/v2/pay/*` and `/trae/api/v2/ug/*` endpoints.
+
+> See `docs/IMPLEMENTATION_PLAN.md`, `docs/SOLO_ROUTE_DECISION.md`, `docs/USAGE_API_RESEARCH.md`.
+
+## Install
+
+```sh
+dsh plugin --profile desktop add dsh-connect-trae
+```
+
+Or directly via npm:
+
+```sh
+npm install dsh-connect-trae
+```
+
+Restart the DSH process after install/update/uninstall.
+
+## Development
+
+```sh
+pnpm install
+pnpm run check   # typecheck + test + build
+```
+
+Local dev via a `link:` install to the desktop profile (restart DSH Desktop after editing):
+
+```sh
+dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae
+```
+
+## License
+
+[MIT](LICENSE)

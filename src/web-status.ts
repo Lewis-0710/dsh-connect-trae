@@ -1,0 +1,108 @@
+/**
+ * Same-origin usage route for the Trae plugin card: sign-in state and the
+ * read-only usage/credit summary, fetched by the browser half. The route
+ * answers loopback browser requests only and never carries token material.
+ *
+ * Follows the `dsh-workbuddy-connect` status-route pattern so the plugin card
+ * stays consistent with that project's external presentation.
+ *
+ * @module dsh-connect-trae/web-status
+ */
+
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-host-webserver'
+import type { TraeCredentialStore } from './auth.ts'
+import type { TraeUsageClient } from './usage.ts'
+import { TRAE_USAGE_PATH } from './status-paths.ts'
+import type { TraeWebCredits, TraeWebUsage } from './status-paths.ts'
+
+export { TRAE_USAGE_PATH } from './status-paths.ts'
+export type { TraeWebUsage } from './status-paths.ts'
+
+/** Constructor dependencies. */
+export interface TraeUsageRouteOptions {
+  store: TraeCredentialStore
+  client: TraeUsageClient
+}
+
+/** Redact token-like content before it crosses to the browser. */
+function safeMessage(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error))
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu, '[redacted token]')
+    .replace(/(\b(?:code|token|refresh_token|access_token)=)[^&\s]+/giu, '$1[redacted]')
+    .slice(0, 500)
+}
+
+function json(res: ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body)
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) })
+  res.end(payload)
+}
+
+/** Loopback browser origins only; other devices are refused until trusted origins exist. */
+function loopbackOrigin(req: IncomingMessage): boolean {
+  const origin = req.headers.origin
+  if (origin === undefined) return true
+  try {
+    const { hostname } = new URL(origin)
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1'
+  } catch {
+    return false
+  }
+}
+
+/** Map the credit snapshot to the card's compact credit document. */
+function toCredits(snapshot: { summary: { totalAmount: number; consumedAmount: number }; packs: { displayDesc: string; remainingCredits?: number; creditsLimit?: number }[] }): TraeWebCredits {
+  const { totalAmount, consumedAmount } = snapshot.summary
+  const accounts = snapshot.packs.map(pack => ({
+    displayDesc: pack.displayDesc,
+    remain: pack.remainingCredits ?? 0,
+    size: pack.creditsLimit ?? 0,
+  }))
+  return { total: totalAmount, consumed: consumedAmount, available: totalAmount - consumedAmount, accounts }
+}
+
+/**
+ * Assemble the card's usage document. Sign-in state is read-only; credit is a
+ * live billing answer whose failure degrades to `creditsError` rather than
+ * failing the whole document.
+ */
+export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWebUsage> {
+  const authStatus = await deps.store.status()
+  if (authStatus.state !== 'signed-in') return { status: 'signed-out' }
+  try {
+    const snapshot = await deps.client.snapshot()
+    return { status: 'signed-in', credits: toCredits(snapshot) }
+  } catch (error: unknown) {
+    return { status: 'signed-in', creditsError: safeMessage(error) }
+  }
+}
+
+/** Mount the GET usage route on an optional webServer context. */
+export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions): void {
+  ctx.effect(() => {
+    const dispose = ctx.webServer.register({
+      kind: 'exact',
+      path: TRAE_USAGE_PATH,
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
+        if (req.method !== 'GET') {
+          json(res, 405, { error: 'method not allowed' })
+          return
+        }
+        if (!loopbackOrigin(req)) {
+          json(res, 403, { error: 'origin-not-trusted' })
+          return
+        }
+        try {
+          json(res, 200, await traeWebUsage(deps))
+        } catch (error: unknown) {
+          json(res, 500, { error: safeMessage(error) })
+        }
+      },
+    })
+    return () => {
+      dispose()
+    }
+  }, 'dsh-connect-trae: Web usage route')
+}
