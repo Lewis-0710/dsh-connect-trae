@@ -28,6 +28,10 @@ export class TraeRawCapabilityController {
     this.enabled = enabled
   }
 
+  inspect() { return this.state.inspect() }
+
+  isEnabled(): boolean { return this.enabled }
+
   invalidate(): void { this.state.invalidate() }
 
   probe(fingerprint: string, signal?: AbortSignal): Promise<TraeRawChatCapability> {

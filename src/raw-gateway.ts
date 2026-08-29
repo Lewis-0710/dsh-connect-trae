@@ -2,6 +2,7 @@ import type { TraeIdentity } from './identity.ts'
 import { probeTraeRawChatCapability } from './raw-capability.ts'
 import { TraeRawCapabilityController } from './raw-capability-controller.ts'
 import { rawCapabilityFingerprint } from './raw-fingerprint.ts'
+import { rawCapabilityDiagnostic, type TraeRawDiagnostic } from './raw-diagnostic.ts'
 import { TraeGatedUpstreamClient } from './gated-upstream.ts'
 import type { TraeRawChatRuntimeConfig } from './raw-runtime-config.ts'
 import type { TraeUpstreamClient } from './upstream.ts'
@@ -19,6 +20,7 @@ export interface TraeRawGatewayOptions {
 export interface TraeRawGateway {
   upstream: TraeUpstreamClient
   probe(signal?: AbortSignal): ReturnType<typeof probeTraeRawChatCapability>
+  diagnostic(): TraeRawDiagnostic
   invalidate(): void
 }
 
@@ -30,6 +32,10 @@ export function createTraeRawGateway(options: TraeRawGatewayOptions): TraeRawGat
   return {
     upstream,
     probe: signal => controller.probe(fingerprint(), signal),
+    diagnostic: () => {
+      const snapshot = controller.inspect()
+      return rawCapabilityDiagnostic(controller.isEnabled(), snapshot.capability, snapshot.checkedAtMs)
+    },
     invalidate: () => controller.invalidate(),
   }
 }

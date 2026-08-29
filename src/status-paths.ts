@@ -67,6 +67,11 @@ export type TraeWebUsage =
     models: readonly TraeWebModel[]
     enabledModelIds: readonly string[]
     enabled1mModelIds: readonly string[]
+    rawChat?: {
+      state: 'disabled' | 'unchecked' | 'available' | 'protocol-gated' | 'authentication' | 'credit' | 'rate' | 'transport' | 'server'
+      checkedAtMs?: number
+      status?: number
+    }
     credits?: TraeWebCredits
     creditsError?: string
   }

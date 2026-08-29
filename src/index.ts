@@ -10,6 +10,11 @@ import { refreshTraeCredential } from './refresh.ts'
 import { createTraeShim } from './shim.ts'
 import { TraeSoloRemoteClient } from './solo-remote.ts'
 import { TraeSoloRemoteBridge } from './solo-remote-bridge.ts'
+import { TraeRawChatUpstreamClient } from './raw-upstream.ts'
+import { createTraeRawGateway } from './raw-gateway.ts'
+import { resolveTraeRawRuntime } from './raw-resolver.ts'
+import type { TraeRawDiagnostic } from './raw-diagnostic.ts'
+import { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
 import { TraeUsageClient } from './usage.ts'
 import { registerTraeUsageRoute } from './web-status.ts'
 
@@ -28,7 +33,9 @@ export { buildTraeAgentTaskBody, buildTraeCnHeaders, TRAE_CN_AGENT_TASK_PATH, TR
 export { buildTraeRawChatDraft, decodeRawChatChunk, TRAE_RAW_CHAT_V1_PATH, TRAE_RAW_CHAT_V2_PATH, type RawChatDelta, type RawChatMessage, type RawChatTool } from './raw-chat.ts'
 export { buildTraeFusionRawChatEnvelope, hashTraeRawChatArg, type TraeFusionRawChatEnvelope } from './raw-envelope.ts'
 export { buildTraeRawChatRuntimeConfig, traeRawChatExtraInfo, type TraeRawChatRuntimeConfig } from './raw-runtime-config.ts'
+export { resolveTraeRawRuntime, type TraeRawResolverResult } from './raw-resolver.ts'
 export { rawCapabilityFingerprint } from './raw-fingerprint.ts'
+export { rawCapabilityDiagnostic, type TraeRawDiagnostic, type TraeRawDiagnosticState } from './raw-diagnostic.ts'
 export { createTraeRawGateway, type TraeRawGateway, type TraeRawGatewayOptions } from './raw-gateway.ts'
 export { classifyTraeRawChatFailure, TraeRawChatUpstreamClient, type TraeRawChatClientOptions, type TraeRawChatConfig, type TraeRawChatFailureReason } from './raw-upstream.ts'
 export { probeTraeRawChatCapability, type TraeRawChatCapability } from './raw-capability.ts'
@@ -42,6 +49,7 @@ export { decodeTraeEvent, SseDecoder, type SseEvent, type TraeStreamEvent } from
 export { prepareSoloBody, TraeSoloUpstreamClient, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_FUNCTION, TRAE_SOLO_MODELS_PATH, type TraeSoloClientOptions } from './solo.ts'
 export { TraeSoloRemoteClient, TRAE_SOLO_REMOTE_BASE, TRAE_SOLO_REMOTE_MODELS, type TraeSoloRemoteOptions } from './solo-remote.ts'
 export { TraeSoloRemoteBridge } from './solo-remote-bridge.ts'
+export { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
 export { TRAE_PAY_BASE, TraeUsageClient, type TraeActivityRule, type TraeCheckinStatus, type TraeUsageOptions, type TraeUsagePack, type TraeUsageSnapshot, type TraeUsageSummary, type TraeUsageView } from './usage.ts'
 export { registerTraeUsageRoute, traeWebUsage, type TraeUsageRouteOptions } from './web-status.ts'
 export { TRAE_USAGE_PATH, type TraeWebActivity, type TraeWebCheckin, type TraeWebCredits, type TraeWebUsage } from './status-paths.ts'
@@ -104,7 +112,38 @@ export function apply(ctx: Context, config: Config): void {
   })
   const remote = new TraeSoloRemoteClient({ credential: () => store.resolve() })
   const upstream = new TraeSoloRemoteBridge(remote)
-  const shim = createTraeShim({ catalog, client: upstream, logger: ctx.logger })
+  // The shim always sees a stable client; the Raw gateway may replace the
+  // delegate asynchronously, but it stays disabled until a probe succeeds.
+  const delegating = new TraeDelegatingUpstreamClient(upstream)
+  const shim = createTraeShim({ catalog, client: delegating, logger: ctx.logger })
+  let rawDiagnostic = (): TraeRawDiagnostic => ({ state: 'disabled' })
+  void (async () => {
+    try {
+      const probeModel = 'qwen-3.7-plus'
+      const { identity, runtime } = await resolveTraeRawRuntime(store, probeModel)
+      const rawClient = new TraeRawChatUpstreamClient({
+        credential: () => store.resolve(),
+        identity: async () => identity,
+        config: { model: runtime.modelName, configName: runtime.configName, passBackReasoning: true, runtime },
+        baseUrl: 'https://trae-api-cn.mchost.guru',
+      })
+      const gateway = createTraeRawGateway({
+        raw: rawClient,
+        solo: upstream,
+        endpoint: 'https://trae-api-cn.mchost.guru/api/ide/v2/llm_raw_chat',
+        edition: identity.edition,
+        identity: { appVersion: identity.appVersion ?? '', buildVersion: identity.buildVersion ?? '' },
+        runtime,
+        // Raw Chat stays opt-in and unverified; SOLO remains the only live path.
+        enabled: false,
+      })
+      delegating.replace(gateway.upstream)
+      rawDiagnostic = () => gateway.diagnostic()
+      ctx.effect(() => () => gateway.invalidate(), 'dsh-connect-trae: Raw capability invalidation')
+    } catch (error: unknown) {
+      ctx.logger.warn('dsh-connect-trae: Raw gateway unavailable; continuing with SOLO Remote', error)
+    }
+  })()
 
   // Read-only usage/credit summary served to the browser half. Optional on the
   // `webServer` seam; absent in headless runs, the host provider still works.
@@ -124,6 +163,7 @@ export function apply(ctx: Context, config: Config): void {
     enabledModelIds: () => current().enabledModelIds ?? [],
     enabled1mModelIds: () => current().enabled1mModels ?? [],
     discoverModels,
+    rawDiagnostic: () => rawDiagnostic(),
   }))
 
   installSettingsSection(ctx, TRAE_SETTINGS_NS, Config, config, {

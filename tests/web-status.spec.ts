@@ -29,6 +29,7 @@ function makeRoute(options: { fetchImpl?: typeof fetch } = {}): TraeUsageRouteOp
     ],
     enabledModelIds: () => ['DeepSeek-V4-Flash'],
     enabled1mModelIds: () => [],
+    rawDiagnostic: () => ({ state: 'protocol-gated', status: 400, checkedAtMs: 123 }),
   }
 }
 
@@ -70,6 +71,7 @@ describe('traeWebUsage', () => {
       accountName: 'LaoDing',
       tokenExpiresAtMs: expiresAtMs,
       models: [{ id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 }],
+      rawChat: { state: 'protocol-gated', status: 400, checkedAtMs: 123 },
       enabledModelIds: ['DeepSeek-V4-Flash'],
       enabled1mModelIds: [],
     })

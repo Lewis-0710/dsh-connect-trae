@@ -15,6 +15,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { TraeCredentialStore } from './auth.ts'
 import type { TraeModelInfo } from './catalog.ts'
 import type { TraeUsageClient } from './usage.ts'
+import type { TraeRawDiagnostic } from './raw-diagnostic.ts'
 import { TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from './status-paths.ts'
 import type { TraeWebCredits, TraeWebUsage } from './status-paths.ts'
 
@@ -32,6 +33,7 @@ export interface TraeUsageRouteOptions {
   /** The user's 1M selection stored as base-model id. */
   enabled1mModelIds(): readonly string[]
   discoverModels?(signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
+  rawDiagnostic?(): TraeRawDiagnostic
 }
 
 /** Redact token-like content before it crosses to the browser. */
@@ -88,6 +90,7 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWeb
     models: deps.displayModels().map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
     enabledModelIds: [...deps.enabledModelIds()],
     enabled1mModelIds: [...deps.enabled1mModelIds()],
+    ...deps.rawDiagnostic === undefined ? {} : { rawChat: deps.rawDiagnostic() },
   }
   try {
     const snapshot = await deps.client.snapshot()

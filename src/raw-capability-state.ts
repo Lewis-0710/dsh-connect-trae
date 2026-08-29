@@ -21,6 +21,10 @@ export class TraeRawCapabilityState {
     this.snapshot = { fingerprint, capability, checkedAtMs: now }
   }
 
+  inspect(): Readonly<TraeRawCapabilitySnapshot> {
+    return { ...this.snapshot }
+  }
+
   invalidate(): void {
     this.snapshot = {}
   }

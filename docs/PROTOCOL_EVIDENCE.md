@@ -194,6 +194,14 @@ Trae CN 的 Agent 状态文件位于 `ModularData/ai-agent/database.db`，当前
 
 该组合器已有离线测试，但在 Raw Chat live probe 成功前不会挂入生产链路。
 
+### 当前 Trae 3.3.83 平台限制（2026-08-29）
+
+已用当前有效凭据、当前设备身份、精确 513-byte model-detail body、官方 16/20-header 集分别通过 Node fetch 与系统 curl 探测。两者均返回 HTTP 400 空响应；同一请求经 Trae native AhaNet 返回 HTTP 200。已排除普通 Cookie、代理路由、JSON 字节、header 大小写和 curl/Undici 实现差异。
+
+AhaNet 位于 Electron NativeExtensionService / `libai_agent.dylib` 私有 ABI 中，JS 层没有公开 fetch bridge；内部 Unix socket/RPC 会话由 Trae 主进程建立。插件不会直接加载私有 dylib、连接内部 socket、安装 TLS MITM 证书或复用第三方自定义模型密钥。由此，当前版本的预置模型 Raw Chat gateway 不能由独立 DSH 插件安全复现。
+
+已实现 capability-gated Raw Chat 框架：默认完全禁用；只有显式启用且短探测成功才成为 primary；否则稳定使用 SOLO Remote。该限制不是完成 text/reasoning/tool_calls/usage/done live 验证的替代，目标仍需等待公开 contract 或可验证的 native request sample。
+
 ## 发布/联网门槛
 
 启用真实 upstream 前，至少满足：

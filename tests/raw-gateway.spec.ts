@@ -15,6 +15,7 @@ describe('Trae Raw gateway assembly', () => {
     const result = await gateway.upstream.chatStream('{}')
     expect(result.ok && await result.response.text()).toBe('solo')
     expect(raw.chatStream).not.toHaveBeenCalled()
+    expect(gateway.diagnostic()).toEqual({ state: 'disabled' })
     await gateway.probe()
     expect(raw.chatStream).not.toHaveBeenCalled()
   })
@@ -27,6 +28,7 @@ describe('Trae Raw gateway assembly', () => {
       runtime: { configName: 'm', modelName: 'm' }, enabled: true,
     })
     await expect(gateway.probe()).resolves.toMatchObject({ available: true })
+    expect(gateway.diagnostic()).toMatchObject({ state: 'available' })
     const result = await gateway.upstream.chatStream('{}')
     expect(result.ok && await result.response.text()).toBe('raw')
     expect(raw.chatStream).toHaveBeenCalledTimes(2)
