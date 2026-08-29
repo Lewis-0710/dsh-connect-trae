@@ -8,6 +8,7 @@ import {
   buildTraeCnHeaders,
   buildTraeRawChatDraft,
   buildTraeFusionRawChatEnvelope,
+  readTraeCachedModel,
   readTraeIdentity,
   refreshTraeCredential,
   TraeCredentialStore,
@@ -35,8 +36,19 @@ const core = buildTraeRawChatDraft({
   maxTokens: 8,
   temperature: 0,
 })
+const cached = envelopeMode ? await readTraeCachedModel('solo_agent', model, credential.userId).catch(() => undefined) : undefined
 const body = envelopeMode
-  ? buildTraeFusionRawChatEnvelope(core, { config_name: model, model_name: model, pass_back_reasoning: true })
+  ? buildTraeFusionRawChatEnvelope(core, {
+      config_name: model,
+      model_name: model,
+      pass_back_reasoning: true,
+      ...cached?.customConfig === undefined ? {} : { custom_config: cached.customConfig },
+      ...cached?.promptMaxTokens === undefined ? {} : { prompt_max_tokens: cached.promptMaxTokens },
+      ...cached?.maxTokens === undefined ? {} : { max_tokens: cached.maxTokens },
+      ...cached?.maxTurn === undefined ? {} : { max_turn: cached.maxTurn },
+      ...cached?.modelType === undefined ? {} : { model_type: cached.modelType },
+      ...cached?.multimodal === undefined ? {} : { multimodal: cached.multimodal },
+    })
   : core
 const target = traeEndpoint('https://trae-api-cn.mchost.guru', TRAE_RAW_CHAT_V2_PATH)
 const summary = {
@@ -46,6 +58,8 @@ const summary = {
   method: 'POST',
   headerNames: Object.keys(headers).sort(),
   envelopeMode,
+  cachedConfigFound: cached !== undefined,
+  cachedConfigKeys: cached === undefined ? [] : Object.keys(cached).sort(),
   bodyKeys: Object.keys(body).sort(),
   messageRoles: core.messages.map(message => message.role),
   messageCount: core.messages.length,

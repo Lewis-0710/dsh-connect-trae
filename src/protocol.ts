@@ -44,7 +44,7 @@ export function buildTraeAgentTaskBody(
   }
 }
 
-export type TraeHeaderProfile = 'agent-task' | 'model-detail' | 'raw-chat'
+export type TraeHeaderProfile = 'agent-task' | 'model-detail' | 'raw-chat' | 'native-curl'
 
 export function buildTraeCnHeaders(
   credential: TraeCredential,
@@ -68,6 +68,19 @@ export function buildTraeCnHeaders(
     'x-flow-traceparent': `04-${traceId}-${traceId.slice(0, 16)}-01`,
     'request-traffic-type': 'prod',
     'Content-Type': 'application/json',
+  }
+  if (profile === 'native-curl') {
+    // Exact set printed by Trae 3.3.83's own get_skill_detail curl diagnostic.
+    // No Authorization, plugin channel, User-Agent or speculative bridge headers.
+    return {
+      'Content-Type': 'application/json',
+      'request-traffic-type': 'prod',
+      'x-app-id': options.appId ?? '6eefa01c-1036-4c7e-9ca5-d891f63bfcd8',
+      ...identityHeaders(identity),
+      'x-custom-trace-id': traceId,
+      'x-flow-traceparent': `04-${traceId}-${traceId.slice(0, 16)}-01`,
+      'X-Ide-Token': credential.accessToken,
+    }
   }
   if (profile === 'model-detail') return { ...common, 'Accept': 'application/json' }
   if (profile === 'raw-chat') return { ...common, 'Accept': 'text/event-stream' }

@@ -44,6 +44,8 @@ export interface TraeRawChatDraft {
   tools?: RawChatTool[]
   max_tokens?: number
   temperature?: number
+  reasoning_effort?: string
+  extra_info?: Record<string, unknown>
 }
 
 /**
@@ -56,6 +58,8 @@ export function buildTraeRawChatDraft(input: {
   tools?: readonly RawChatTool[]
   maxTokens?: number
   temperature?: number
+  reasoningEffort?: string
+  extraInfo?: Record<string, unknown>
 }): TraeRawChatDraft {
   if (input.model.trim() === '') throw new Error('Trae raw chat requires a model')
   if (input.messages.length === 0) throw new Error('Trae raw chat requires messages')
@@ -66,6 +70,8 @@ export function buildTraeRawChatDraft(input: {
     ...input.tools === undefined || input.tools.length === 0 ? {} : { tools: structuredClone([...input.tools]) },
     ...input.maxTokens === undefined ? {} : { max_tokens: input.maxTokens },
     ...input.temperature === undefined ? {} : { temperature: input.temperature },
+    ...input.reasoningEffort === undefined ? {} : { reasoning_effort: input.reasoningEffort },
+    ...input.extraInfo === undefined ? {} : { extra_info: structuredClone(input.extraInfo) },
   }
 }
 

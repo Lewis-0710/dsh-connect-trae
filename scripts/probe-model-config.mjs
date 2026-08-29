@@ -20,11 +20,12 @@ const store = new TraeCredentialStore({ storagePath: candidate.path, edition: 'c
 const credential = await store.resolve()
 const identity = await readTraeIdentity(candidate)
 const requestId = crypto.randomUUID()
-const headers = buildTraeCnHeaders(credential, identity, { requestId, profile: 'model-detail' })
+const headerProfile = process.argv.includes('--native-curl') ? 'native-curl' : 'model-detail'
+const headers = buildTraeCnHeaders(credential, identity, { requestId, profile: headerProfile })
 const endpoint = traeEndpoint('https://trae-api-cn.mchost.guru', TRAE_MODEL_DETAIL_PATH)
 const body = buildTraeModelDetailRequest(configName, custom)
 const base = {
-  mode: live ? 'live' : 'dry-run', endpoint, headerNames: Object.keys(headers).sort(), bodyKeys: Object.keys(body).sort(),
+  mode: live ? 'live' : 'dry-run', endpoint, headerProfile, headerNames: Object.keys(headers).sort(), bodyKeys: Object.keys(body).sort(),
   functions: body.functions, functionCount: body.functions.length, agentType: body.agent_type,
   currentConfig: { configured: body.current_config_info.config_name !== '', custom: body.current_config_info.is_custom_model },
   fallbackEndpoints: [],

@@ -15,6 +15,18 @@ describe('Trae raw-chat evidence model', () => {
     expect(() => buildTraeRawChatDraft({ model: 'm', messages: [] })).toThrow(/messages/)
   })
 
+  it('adds only explicit reasoning and safe runtime extra info', () => {
+    const messages = [{ role: 'user' as const, content: 'hello' }]
+    const body = buildTraeRawChatDraft({
+      model: 'qwen-3.7-plus', messages, reasoningEffort: 'high',
+      extraInfo: { native_function_call: true, use_v2_process: true, max_mode_enabled: false },
+    })
+    expect(body).toMatchObject({
+      reasoning_effort: 'high',
+      extra_info: { native_function_call: true, use_v2_process: true, max_mode_enabled: false },
+    })
+  })
+
   it('decodes text, reasoning, tool calls, usage and finish reason', () => {
     expect(decodeRawChatChunk({
       choices: [{ delta: {

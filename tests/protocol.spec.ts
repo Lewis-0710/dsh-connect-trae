@@ -54,6 +54,15 @@ describe('Trae CN protocol draft', () => {
     expect(raw.Accept).toBe('text/event-stream')
   })
 
+  it('matches the exact native curl diagnostic header set', () => {
+    const headers = buildTraeCnHeaders(credential, identity, { requestId: 'native', profile: 'native-curl' })
+    expect(headers).toMatchObject({ 'X-Ide-Token': 'secret-access', 'x-app-id': expect.any(String), 'Content-Type': 'application/json' })
+    expect(headers).not.toHaveProperty('Authorization')
+    expect(headers).not.toHaveProperty('x-plugin-channel')
+    expect(headers).not.toHaveProperty('User-Agent')
+    expect(headers).not.toHaveProperty('Accept')
+  })
+
   it('refuses to reuse the CN request contract for SG', () => {
     expect(() => buildTraeCnHeaders({ ...credential, edition: 'sg' }, { ...identity, edition: 'sg' })).toThrow(/not verified/)
   })
