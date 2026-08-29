@@ -311,7 +311,11 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                                   onChange={() => { toggleModel(model.id) }}
                                 />
                                 <span className="dsm-trae-model-copy">
-                                  <span className="dsm-trae-model-name">{model.name}</span>
+                                  <span className="dsm-trae-model-name">
+                                    {model.name}
+                                    {model.creditMultiplier === undefined ? null
+                                      : <span className="dsm-trae-model-name-rate">{t('row.modelRate', { rate: model.creditMultiplier.toFixed(2) })}</span>}
+                                  </span>
                                   <span className="dsm-trae-model-id">{model.id}</span>
                                 </span>
                               </label>
@@ -330,8 +334,6 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                               <span>{t('row.modelContext', { context: formatCapacity(model.contextWindow, t('row.modelUnknown')) })}</span>
                               {model.maxTokens === undefined ? null
                                 : <span>{t('row.modelOutput', { output: formatCapacity(model.maxTokens, t('row.modelUnknown')) })}</span>}
-                              {model.creditMultiplier === undefined ? null
-                                : <span>{t('row.modelRate', { rate: model.creditMultiplier.toFixed(2) })}</span>}
                               {model.maxContext === true ? <span>{t('row.modelMaxContext')}</span> : null}
                               {model.reasoning === undefined ? null
                                 : <span>{t('row.modelReasoning', { efforts: model.reasoning.supported.map(effort => EFFORT_LABELS[effort] ?? effort).join(' / ') })}</span>}
