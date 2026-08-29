@@ -147,10 +147,17 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
       })
       const body = await response.json() as { models?: TraeWebModel[] }
       if (!response.ok || !Array.isArray(body.models)) throw new Error(`HTTP ${response.status}`)
-      const savedIds = status.status === 'signed-in' ? new Set(status.models.filter(model => model.maxContext !== true).map(model => model.id)) : new Set<string>()
-      setDraftModels(body.models.filter(model => model.maxContext !== true))
-      setDraftEnabledIds(new Set(body.models.filter(model => savedIds.has(model.id)).map(model => model.id)))
-      setDraft1mIds(new Set(enabled1mModels))
+      const fresh = body.models.filter(model => model.maxContext !== true)
+      // Map the old SAVED selection onto the fresh catalog by model id
+      // (= Trae name), so renames and additions never silently lose choices.
+      const oldEnabled = status.status === 'signed-in' ? new Set(status.enabledModelIds) : new Set<string>()
+      const old1m = status.status === 'signed-in' ? new Set(status.enabled1mModelIds) : new Set<string>()
+      const freshIds = new Set(fresh.map(model => model.id))
+      const stillEnabled = [...oldEnabled].filter(id => freshIds.has(id))
+      const still1m = [...old1m].filter(id => freshIds.has(id))
+      setDraftModels(fresh)
+      setDraftEnabledIds(new Set(stillEnabled))
+      setDraft1mIds(new Set(still1m))
     } catch (error: unknown) {
       if (mounted.current) setStatus({ status: 'error', message: error instanceof Error ? error.message : t('row.requestFailed') })
     } finally {
@@ -165,24 +172,29 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
       : [],
   )
   void settingsRevision
-  const visibleModels = draftModels ?? (status.status === 'signed-in' ? status.models.filter(model => model.maxContext !== true) : [])
-  const savedEnabledIds = status.status === 'signed-in' ? new Set(status.models.filter(model => model.maxContext !== true).map(model => model.id)) : new Set<string>()
+  // The card always renders the last-refreshed raw directory (`status.models`
+  // carries `lastCatalog`), never a stale saved snapshot. Enabled flags come
+  // from the user's stored selection, re-mapped onto the current catalog by
+  // model id (= Trae name).
+  const visibleModels = draftModels ?? (status.status === 'signed-in' ? status.models : [])
+  const savedEnabledIds = status.status === 'signed-in' ? new Set(status.enabledModelIds) : new Set<string>()
+  const saved1mIds = status.status === 'signed-in' ? new Set(status.enabled1mModelIds) : new Set<string>()
   const activeEnabledIds = draftEnabledIds ?? savedEnabledIds
-  const active1mIds = draft1mIds ?? enabled1mModels
+  const active1mIds = draft1mIds ?? saved1mIds
   const dirty = draftModels !== undefined || draftEnabledIds !== undefined || draft1mIds !== undefined
 
   const toggleModel = (modelId: string): void => {
     const next = new Set(activeEnabledIds)
     if (!next.delete(modelId)) next.add(modelId)
     setDraftEnabledIds(next)
-    setDraftModels(visibleModels)
+    setDraftModels([...visibleModels])
   }
 
   const toggle1m = (modelId: string): void => {
     const next = new Set(active1mIds)
     if (!next.delete(modelId)) next.add(modelId)
     setDraft1mIds(next)
-    setDraftModels(visibleModels)
+    setDraftModels([...visibleModels])
   }
 
   const discardModels = (): void => {
@@ -195,13 +207,12 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
     if (settingsScope === undefined) return
     setSaving(true)
     try {
-      const selected = visibleModels.filter(model => activeEnabledIds.has(model.id)).map(model => ({
-        ...model,
-        maxContext: undefined,
-        maxContextEnabled: undefined,
-        maxContextWindow: undefined,
-      }))
-      await settingsScope.set('models', selected)
+      // Save the raw directory plus the pure selection. The Host derives the
+      // runtime catalog (ordinary + @1m variants) from these two on save/restart,
+      // so re-opening the card re-reads Trae's current catalog instead of a
+      // snapshot that can go stale.
+      await settingsScope.set('lastCatalog', visibleModels.filter(model => model.maxContext !== true))
+      await settingsScope.set('enabledModelIds', [...activeEnabledIds])
       await settingsScope.set('enabled1mModels', [...active1mIds].filter(id => activeEnabledIds.has(id)))
       discardModels()
       await refresh()
@@ -314,7 +325,7 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                                   <span className="dsm-trae-model-name">
                                     {model.name}
                                     {model.creditMultiplier === undefined ? null
-                                      : <span className="dsm-trae-model-name-rate">{t('row.modelRate', { rate: model.creditMultiplier.toFixed(2) })}</span>}
+                                      : <span className="dsm-trae-model-name-rate">({model.creditMultiplier.toFixed(2)}x)</span>}
                                   </span>
                                   <span className="dsm-trae-model-id">{model.id}</span>
                                 </span>

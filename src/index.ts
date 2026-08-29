@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
 import { TraeCredentialStore } from './auth.ts'
-import { discoveredCatalog, FALLBACK_TRAE_MODELS, TraeCatalog, type TraeModelInfo } from './catalog.ts'
+import { deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, TraeCatalog, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential } from './refresh.ts'
 import { createTraeShim } from './shim.ts'
 import { TraeSoloRemoteClient } from './solo-remote.ts'
@@ -19,6 +19,7 @@ export { discoveredCatalog, FALLBACK_TRAE_MODELS, TraeCatalog, type TraeModelInf
 export { decryptTraeStorageValue, parseTraeAuthValue, parseTraeStorageDocument } from './decrypt.ts'
 export { identityHeaders, readTraeIdentity, type TraeIdentity } from './identity.ts'
 export { parseObservedModelConfig, type TraeObservedModelConfig } from './model-config.ts'
+export { buildTraeModelDetailRequest, TRAE_MODEL_DETAIL_FUNCTIONS, TRAE_MODEL_DETAIL_PATH, type TraeModelDetailRequest } from './model-detail.ts'
 export { parseTraeRemoteModel, type TraeDiscoveredModel, type TraeDiscoveredReasoning } from './model-metadata.ts'
 export { traeStorageCandidates, type TraeEdition, type TraeStorageCandidate } from './paths.ts'
 export { buildTraeAgentTaskBody, buildTraeCnHeaders, TRAE_CN_AGENT_TASK_PATH, TRAE_CN_TITLE_PATH, traeEndpoint } from './protocol.ts'
@@ -43,8 +44,14 @@ export const TRAE_SETTINGS_NS = settingsNamespace('trae')
 export interface Config {
   authFile?: string
   edition?: 'auto' | 'cn' | 'sg' | 'solo' | 'solo-sg'
-  models?: TraeModelInfo[]
+  /** The last-refreshed Trae raw directory; what the plugin card displays. */
+  lastCatalog?: TraeModelInfo[]
+  /** The user's ordinary-model selection, as model id (= Trae name). */
+  enabledModelIds?: string[]
+  /** The user's 1M selection, as base-model id. */
   enabled1mModels?: string[]
+  /** Legacy generated runtime catalog; kept for backwards compatibility. */
+  models?: TraeModelInfo[]
 }
 
 const modelConfig = z.object({
@@ -58,13 +65,27 @@ const modelConfig = z.object({
 export const Config: z<Config> = z.object({
   authFile: z.string().description('Optional Trae storage.json path override'),
   edition: z.union(['auto', 'cn', 'sg', 'solo', 'solo-sg']).default('auto').description('Trae edition hint'),
-  models: z.array(modelConfig).description('Trae models available to DSH') as z<TraeModelInfo[]>,
-  enabled1mModels: z.array(z.string()).default([]).description('Trae model ids whose verified 1M variants are enabled'),
+  lastCatalog: z.array(modelConfig).description('Last refreshed Trae raw model directory shown by the plugin card') as z<TraeModelInfo[]>,
+  enabledModelIds: z.array(z.string()).default([]).description('Trae model ids the user enabled'),
+  enabled1mModels: z.array(z.string()).default([]).description('Trae model ids whose 1M variants are enabled'),
+  models: z.array(modelConfig).description('Legacy generated Trae model list') as z<TraeModelInfo[]>,
 })
 
 export function apply(ctx: Context, config: Config): void {
   const catalog = new TraeCatalog()
-  const configuredModels = (value: Config): readonly TraeModelInfo[] => value.models?.length ? value.models : FALLBACK_TRAE_MODELS
+  const enabledSet = (value: Config): ReadonlySet<string> => new Set(value.enabledModelIds ?? [])
+  const enabled1mSet = (value: Config): ReadonlySet<string> => new Set(value.enabled1mModels ?? [])
+  // Runtime catalog derives from the last-refreshed raw directory plus the
+  // user's selection. The legacy `models` field remains as a fallback for
+  // configurations saved before this split.
+  const configuredModels = (value: Config): readonly TraeModelInfo[] => {
+    if (value.lastCatalog?.length) return deriveCatalog(value.lastCatalog, enabledSet(value), enabled1mSet(value))
+    return value.models?.length ? value.models : FALLBACK_TRAE_MODELS
+  }
+  // What the plugin card displays: the last-refreshed raw directory, so the
+  // user re-reads the current Trae catalog rather than a stale saved snapshot.
+  const displayModels = (value: Config): readonly TraeModelInfo[] =>
+    value.lastCatalog?.length ? value.lastCatalog : (value.models?.length ? value.models : FALLBACK_TRAE_MODELS)
   const store = new TraeCredentialStore({
     ...config.authFile === undefined ? {} : { storagePath: config.authFile },
     edition: config.edition ?? 'auto',
@@ -88,7 +109,9 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['webServer'], (webCtx) => registerTraeUsageRoute(webCtx, {
     store,
     client: usageClient,
-    models: () => catalog.current(),
+    displayModels: () => displayModels(current()),
+    enabledModelIds: () => current().enabledModelIds ?? [],
+    enabled1mModelIds: () => current().enabled1mModels ?? [],
     discoverModels,
   }))
 

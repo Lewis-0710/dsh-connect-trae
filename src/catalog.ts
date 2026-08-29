@@ -48,11 +48,45 @@ export function discoveredCatalog(models: readonly TraeDiscoveredModel[], enable
     if (model.maxContextWindow !== undefined && enabled1m.has(model.id)) {
       result.push({
         id: `${model.id}@1m`,
-        name: `${model.name} (1M)`,
+        name: `${model.name} 1M`,
         contextWindow: model.maxContextWindow,
         baseModelId: model.id,
         maxContext: true,
         ...common,
+      })
+    }
+  }
+  return result
+}
+
+/**
+ * Derive the runtime catalog from the last refreshed Trae directory plus the
+ * user's explicit selection. Ordinary models whose `id` (Trae `name`) is
+ * enabled survive; each 1M-capable enabled model produces a `@1m` variant.
+ * This is the single source of truth for what DSH actually exposes, so saving
+ * only the selection is enough to rebuild it after a restart.
+ */
+export function deriveCatalog(
+  catalog: readonly TraeModelInfo[],
+  enabled: ReadonlySet<string>,
+  enabled1m: ReadonlySet<string>,
+): TraeModelInfo[] {
+  const result: TraeModelInfo[] = []
+  for (const model of catalog) {
+    if (!enabled.has(model.id)) continue
+    result.push(model)
+    if (enabled1m.has(model.id) && model.maxContextWindow !== undefined) {
+      result.push({
+        id: `${model.id}@1m`,
+        name: `${model.name} 1M`,
+        contextWindow: model.maxContextWindow,
+        baseModelId: model.id,
+        maxContext: true,
+        ...model.input === undefined ? {} : { input: [...model.input] },
+        ...model.creditMultiplier === undefined ? {} : { creditMultiplier: model.creditMultiplier },
+        ...model.reasoningSupported === undefined ? {} : { reasoningSupported: model.reasoningSupported },
+        ...model.reasoning === undefined ? {} : { reasoning: model.reasoning },
+        ...model.reasoningEfforts === undefined ? {} : { reasoningEfforts: model.reasoningEfforts },
       })
     }
   }

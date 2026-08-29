@@ -24,9 +24,11 @@ function makeRoute(options: { fetchImpl?: typeof fetch } = {}): TraeUsageRouteOp
       async resolve() { return credential },
     } as unknown as TraeUsageRouteOptions['store'],
     client,
-    models: () => [
+    displayModels: () => [
       { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 },
     ],
+    enabledModelIds: () => ['DeepSeek-V4-Flash'],
+    enabled1mModelIds: () => [],
   }
 }
 
@@ -68,6 +70,8 @@ describe('traeWebUsage', () => {
       accountName: 'LaoDing',
       tokenExpiresAtMs: expiresAtMs,
       models: [{ id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 }],
+      enabledModelIds: ['DeepSeek-V4-Flash'],
+      enabled1mModelIds: [],
     })
     expect(result.credits).toEqual({
       total: 7500,
@@ -84,9 +88,9 @@ describe('traeWebUsage', () => {
   it('keeps discovered candidates separate from the saved runtime list', async () => {
     const deps = makeRoute()
     deps.discoverModels = async () => [{ id: 'new-model', name: 'New Model', contextWindow: 200_000 }]
-    const before = deps.models()
+    const before = deps.displayModels()
     await expect(deps.discoverModels()).resolves.toEqual([{ id: 'new-model', name: 'New Model', contextWindow: 200_000 }])
-    expect(deps.models()).toEqual(before)
+    expect(deps.displayModels()).toEqual(before)
   })
 
   it('degrades a failing credit fetch to creditsError', async () => {

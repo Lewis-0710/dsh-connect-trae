@@ -65,6 +65,8 @@ export type TraeWebUsage =
     accountName: string
     tokenExpiresAtMs: number
     models: readonly TraeWebModel[]
+    enabledModelIds: readonly string[]
+    enabled1mModelIds: readonly string[]
     credits?: TraeWebCredits
     creditsError?: string
   }
