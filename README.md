@@ -1,5 +1,5 @@
 <p align="center">
-  <b>dsh-connect-trae</b>
+  <img src="docs/assets/dsh-connect-trae-usage-card.png" width="860" alt="dsh-connect-trae settings panel" />
 </p>
 
 <h1 align="center">dsh-connect-trae</h1>
@@ -16,18 +16,14 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-connect-trae"><img src="https://img.shields.io/npm/v/dsh-connect-trae?style=flat-square&label=npm&color=cb3837" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-connect-trae"><img src="https://img.shields.io/npm/dm/dsh-connect-trae?style=flat-square&label=downloads" alt="npm downloads"></a>
+  <a href="https://github.com/dingminhua/dsh-connect-trae/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dingminhua/dsh-connect-trae/ci.yml?branch=main&style=flat-square&label=tests" alt="test status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/dingminhua/dsh-connect-trae?style=flat-square" alt="MIT license"></a>
+  <a href="https://github.com/dingminhua/dsh-connect-trae/stargazers"><img src="https://img.shields.io/github/stars/dingminhua/dsh-connect-trae?style=flat-square" alt="GitHub stars"></a>
+  <a href="https://dshfind.com/plugins/dingminhua/dsh-connect-trae"><img src="https://dshfind.com/api/badge/dingminhua/dsh-connect-trae" alt="dshfind plugin"></a>
 </p>
 
 一个独立的 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle 插件。它把本机已登录的 Trae 中国区账号接到 DSH 的模型选择器：模型负责生成结构化工具调用，`bash` / `read` / `write` / `edit` 等工具由 DSH 本地执行；同时提供**只读**的 Work/通用积分与模型管理界面。
-
-## 效果预览
-
-<p align="center">
-  <img src="docs/assets/dsh-connect-trae-usage-card.png" alt="DSH Connect Trae 插件卡片：Trae 账号、Work 与通用积分以及模型管理" width="900">
-</p>
-
-<p align="center"><sub>设置 → 插件配置 → DSH Connect Trae：切换本机 Trae 账号、查看 Work/通用积分，并管理 DSH 中启用的 Trae 模型。</sub></p>
 
 ## 功能特性
 

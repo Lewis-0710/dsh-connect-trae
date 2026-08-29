@@ -1,16 +1,29 @@
-# dsh-connect-trae
-
-[English](README.en.md) | 中文
-
-A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle plugin that connects locally signed-in Trae CN models to the DSH model picker. Trae generates structured tool calls while DSH executes its own local tools, with a read-only Work/general credits and model-management panel.
-
-## Preview
-
 <p align="center">
-  <img src="docs/assets/dsh-connect-trae-usage-card.png" alt="DSH Connect Trae plugin card showing account selection, Work and general credits, and model management" width="900">
+  <img src="docs/assets/dsh-connect-trae-usage-card.png" width="860" alt="dsh-connect-trae settings panel" />
 </p>
 
-<p align="center"><sub>Settings → Plugins → DSH Connect Trae: switch local Trae accounts, view Work/general credits, and manage the Trae models enabled in DSH.</sub></p>
+<h1 align="center">dsh-connect-trae</h1>
+
+<p align="center"><b>Connect locally signed-in Trae models to DeepSeek Harness with local DSH tools and a read-only credits overview.</b></p>
+
+<p align="center">
+  <a href="README.md">中文</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/dingminhua/dsh-connect-trae/issues">Issues</a>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/dsh-connect-trae"><img src="https://img.shields.io/npm/v/dsh-connect-trae?style=flat-square&label=npm&color=cb3837" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/dsh-connect-trae"><img src="https://img.shields.io/npm/dm/dsh-connect-trae?style=flat-square&label=downloads" alt="npm downloads"></a>
+  <a href="https://github.com/dingminhua/dsh-connect-trae/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dingminhua/dsh-connect-trae/ci.yml?branch=main&style=flat-square&label=tests" alt="test status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/dingminhua/dsh-connect-trae?style=flat-square" alt="MIT license"></a>
+  <a href="https://github.com/dingminhua/dsh-connect-trae/stargazers"><img src="https://img.shields.io/github/stars/dingminhua/dsh-connect-trae?style=flat-square" alt="GitHub stars"></a>
+  <a href="https://dshfind.com/plugins/dingminhua/dsh-connect-trae"><img src="https://dshfind.com/api/badge/dingminhua/dsh-connect-trae" alt="dshfind plugin"></a>
+</p>
+
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle plugin that connects locally signed-in Trae CN models to the DSH model picker. Trae generates structured tool calls while DSH executes its own local tools, with a read-only Work/general credits and model-management panel.
 
 ## Features
 
