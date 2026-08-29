@@ -48,7 +48,7 @@ export class TraeRawChatUpstreamClient {
     if (!Array.isArray(input.messages) || input.messages.length === 0) return { ok: false, status: 400, kind: 'client', message: 'messages are required' }
     const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()])
     const requestId = crypto.randomUUID()
-    const headers = buildTraeCnHeaders(credential, identity, { requestId })
+    const headers = buildTraeCnHeaders(credential, identity, { requestId, profile: 'raw-chat' })
     const core = buildTraeRawChatDraft({
       model: this.options.config.model,
       messages: input.messages,

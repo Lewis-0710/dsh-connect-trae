@@ -36,6 +36,24 @@ describe('Trae CN protocol draft', () => {
     })
   })
 
+  it('uses endpoint-specific auth profiles for model detail and Raw Chat', () => {
+    const detail = buildTraeCnHeaders(credential, identity, { requestId: 'detail', profile: 'model-detail' })
+    const raw = buildTraeCnHeaders(credential, identity, { requestId: 'raw', profile: 'raw-chat' })
+    for (const headers of [detail, raw]) {
+      expect(headers).toMatchObject({
+        Authorization: 'Cloud-IDE-JWT secret-access',
+        'X-Ide-Token': 'secret-access',
+        'x-plugin-channel': 'icube-ai',
+      })
+      expect(headers).not.toHaveProperty('X-Cloudide-Token')
+      expect(headers).not.toHaveProperty('x-uid')
+      expect(headers).not.toHaveProperty('x-request-id')
+      expect(headers).not.toHaveProperty('x-trae-request-id')
+    }
+    expect(detail.Accept).toBe('application/json')
+    expect(raw.Accept).toBe('text/event-stream')
+  })
+
   it('refuses to reuse the CN request contract for SG', () => {
     expect(() => buildTraeCnHeaders({ ...credential, edition: 'sg' }, { ...identity, edition: 'sg' })).toThrow(/not verified/)
   })

@@ -182,6 +182,18 @@ Trae CN 的 Agent 状态文件位于 `ModularData/ai-agent/database.db`，当前
 
 该模块不执行fetch，不能被视为上游已可用。
 
+### Raw Chat 主链路 / SOLO 回退安全边界
+
+新增 `TraeFallbackUpstreamClient`，为未来 Raw Chat 切主链路预先固定非幂等安全规则：
+
+- 仅在主链路明确返回 HTTP 400 / 404 / 415 且尚未得到 Response，或明确为 `unconfigured` 时回退；
+- 401 / 403、额度不足、429、服务端/网络错误不回退，避免隐藏账号和计费错误；
+- 主链路一旦返回 Response，即使 SSE body 后续失败也不回退，避免同一请求双重计费或重复工具调用；
+- AbortSignal 已取消时不回退；
+- 回退只通过可选脱敏回调记录错误分类，不记录请求、token 或生成内容。
+
+该组合器已有离线测试，但在 Raw Chat live probe 成功前不会挂入生产链路。
+
 ## 发布/联网门槛
 
 启用真实 upstream 前，至少满足：

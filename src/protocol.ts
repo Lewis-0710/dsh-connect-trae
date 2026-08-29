@@ -44,30 +44,39 @@ export function buildTraeAgentTaskBody(
   }
 }
 
+export type TraeHeaderProfile = 'agent-task' | 'model-detail' | 'raw-chat'
+
 export function buildTraeCnHeaders(
   credential: TraeCredential,
   identity: TraeIdentity,
-  options: { appId?: string; requestId?: string } = {},
+  options: { appId?: string; requestId?: string; profile?: TraeHeaderProfile } = {},
 ): Record<string, string> {
   if (credential.edition !== 'cn' && credential.edition !== 'solo') {
     throw new Error(`Trae ${credential.edition} request contract is not verified`)
   }
   const requestId = options.requestId ?? randomUUID()
   const traceId = requestId.replaceAll('-', '').slice(0, 32)
-  return {
+  const profile = options.profile ?? 'agent-task'
+  const common = {
     'Authorization': `Cloud-IDE-JWT ${credential.accessToken}`,
-    'X-Cloudide-Token': credential.accessToken,
     'X-Ide-Token': credential.accessToken,
-    'x-uid': credential.userId,
+    'x-plugin-channel': 'icube-ai',
     'User-Agent': `Trae/${identity.appVersion ?? identity.buildVersion ?? 'unknown'}`,
     'x-app-id': options.appId ?? '6eefa01c-1036-4c7e-9ca5-d891f63bfcd8',
     ...identityHeaders(identity),
-    'x-request-id': requestId,
-    'x-trae-request-id': requestId,
     'x-custom-trace-id': traceId,
     'x-flow-traceparent': `04-${traceId}-${traceId.slice(0, 16)}-01`,
     'request-traffic-type': 'prod',
     'Content-Type': 'application/json',
+  }
+  if (profile === 'model-detail') return { ...common, 'Accept': 'application/json' }
+  if (profile === 'raw-chat') return { ...common, 'Accept': 'text/event-stream' }
+  return {
+    ...common,
+    'X-Cloudide-Token': credential.accessToken,
+    'x-uid': credential.userId,
+    'x-request-id': requestId,
+    'x-trae-request-id': requestId,
     'Accept': 'text/event-stream',
   }
 }

@@ -25,7 +25,7 @@ const store = new TraeCredentialStore({ storagePath: candidate.path, edition: ca
 const credential = await store.resolve()
 const identity = await readTraeIdentity(candidate)
 const requestId = crypto.randomUUID()
-const headers = buildTraeCnHeaders(credential, identity, { requestId })
+const headers = buildTraeCnHeaders(credential, identity, { requestId, profile: 'raw-chat' })
 const body = buildTraeRawChatDraft({
   model: 'glm-5.2',
   messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
