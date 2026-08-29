@@ -23,6 +23,23 @@ describe('TraeSoloRemoteBridge', () => {
     expect(text).toContain('data: [DONE]')
   })
 
+  it('forwards all ordered text messages instead of only the last user message', async () => {
+    const remote = { chat: vi.fn(async () => ({ content: 'OK', sessionId: 's' })) } as unknown as TraeSoloRemoteClient
+    const bridge = new TraeSoloRemoteBridge(remote)
+    await bridge.chatStream(JSON.stringify({ model: 'm', messages: [
+      { role: 'system', content: 'Current working directory: /repo' },
+      { role: 'assistant', content: 'Earlier reply' },
+      { role: 'tool', content: [{ type: 'text', text: 'tool result' }] },
+      { role: 'user', content: 'Continue' },
+    ] }))
+    expect(remote.chat).toHaveBeenCalledWith([
+      { role: 'system', content: 'Current working directory: /repo' },
+      { role: 'assistant', content: 'Earlier reply' },
+      { role: 'tool', content: 'tool result' },
+      { role: 'user', content: 'Continue' },
+    ], 'm', undefined)
+  })
+
   it('rejects invalid input without calling remote', async () => {
     const remote = { chat: vi.fn() } as unknown as TraeSoloRemoteClient
     const bridge = new TraeSoloRemoteBridge(remote)

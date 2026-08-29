@@ -27,6 +27,8 @@
 - 思考强度只在 Trae 模型元数据明确公布时开放，不虚构档位。
 - 积分倍率与 1M 上下文只展示已验证的上游数据；未取得真实字段时显示“待上游确认”或暂不展示。
 - 不把 access token、refresh token、邮箱、手机号或稳定用户 ID 传到浏览器。
+- DSH 当前工作目录不作为 Trae 云端可访问路径处理；它由 DSH system prompt/消息上下文告知模型，文件访问仍必须通过 DSH 工具完成。
+- SOLO Remote bridge 必须保留完整有序文本消息（system/assistant/tool/user），不得压缩成最后一条 user message。
 
 ## 首版效果
 

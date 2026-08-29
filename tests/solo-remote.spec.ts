@@ -1,10 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
-import { TraeSoloRemoteClient } from '../src/solo-remote.ts'
+import { serializeTraeConversation, TraeSoloRemoteClient } from '../src/solo-remote.ts'
 import type { TraeCredential } from '../src/auth.ts'
 
 const credential: TraeCredential = { accessToken: 'eyJhbGciOiJSUzI1NiJ9.eyJkYXRhIjp7ImlkIjoiMTI3MjU3NzA3ODM0NDQ3MiJ9LCJleHAiOjk5OTk5OTk5OTl9.signature', userId: 'uid', host: 'https://host', expiresAtMs: Date.now() + 1000, edition: 'solo', source: 'desktop' }
 
 describe('TraeSoloRemoteClient', () => {
+  it('preserves complete ordered DSH text context, including cwd-bearing system instructions', () => {
+    expect(serializeTraeConversation([
+      { role: 'system', content: 'Current working directory: /workspace/project' },
+      { role: 'assistant', content: 'I will inspect it.' },
+      { role: 'tool', content: 'package.json contents' },
+      { role: 'user', content: 'Continue.' },
+    ])).toBe('<dsh-message role="system">\nCurrent working directory: /workspace/project\n</dsh-message>\n\n<dsh-message role="assistant">\nI will inspect it.\n</dsh-message>\n\n<dsh-message role="tool">\npackage.json contents\n</dsh-message>\n\n<dsh-message role="user">\nContinue.\n</dsh-message>')
+    expect(serializeTraeConversation([{ role: 'user', content: 'hi' }])).toBe('hi')
+  })
+
   it('creates a session, polls, and extracts the final answer', async () => {
     let callCount = 0
     const fetchImpl = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
@@ -22,6 +32,8 @@ describe('TraeSoloRemoteClient', () => {
     expect(result.content).toBe('OK')
     expect(result.sessionId).toBe('sess-1')
     expect(fetchImpl.mock.calls[0]?.[0]).toContain('/chat_sessions')
+    const request = fetchImpl.mock.calls[0]?.[1] as RequestInit | undefined
+    expect(request?.body).toContain('Reply with exactly: OK')
   })
 
   it('rejects when session creation fails', async () => {

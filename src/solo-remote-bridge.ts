@@ -22,14 +22,24 @@ export class TraeSoloRemoteBridge implements TraeUpstreamClient {
   constructor(private readonly remote: TraeSoloRemoteClient) {}
 
   async chatStream(bodyJson: string, signal?: AbortSignal): Promise<TraeChatResult> {
-    let parsed: { model?: string; messages?: { role?: string; content?: string }[] }
+    let parsed: { model?: string; messages?: { role?: string; content?: unknown }[] }
     try { parsed = JSON.parse(bodyJson) as typeof parsed }
     catch { return { ok: false, status: 400, kind: 'client', message: 'invalid JSON request' } }
     if (!Array.isArray(parsed.messages) || parsed.messages.length === 0) {
       return { ok: false, status: 400, kind: 'client', message: 'messages are required' }
     }
-    const messages = parsed.messages.filter((message): message is { role: string; content: string } =>
-      typeof message.role === 'string' && typeof message.content === 'string')
+    const messages = parsed.messages.flatMap(message => {
+      if (typeof message.role !== 'string') return []
+      if (typeof message.content === 'string') return [{ role: message.role, content: message.content }]
+      if (!Array.isArray(message.content)) return []
+      const content = message.content.flatMap(part => {
+        if (typeof part !== 'object' || part === null) return []
+        const item = part as { type?: unknown; text?: unknown; content?: unknown }
+        const text = typeof item.text === 'string' ? item.text : typeof item.content === 'string' ? item.content : undefined
+        return text === undefined ? [] : [text]
+      }).join('\n')
+      return content === '' ? [] : [{ role: message.role, content }]
+    })
     if (messages.length === 0) return { ok: false, status: 400, kind: 'client', message: 'text messages are required' }
     const model = typeof parsed.model === 'string' && parsed.model !== '' ? parsed.model : 'DeepSeek-V4-Flash'
     const upstreamModel = model.endsWith('@1m') ? model.slice(0, -3) : model

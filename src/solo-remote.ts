@@ -39,6 +39,22 @@ interface SoloRemoteMessage {
   content?: string
 }
 
+export interface TraeRemoteInputMessage {
+  role: string
+  content: string
+}
+
+/**
+ * Preserve DSH's complete text conversation in the one query accepted by the
+ * SOLO Remote create-session endpoint. System instructions (including DSH's
+ * workspace/cwd context), assistant history, tool-result text and the newest
+ * user request stay ordered instead of collapsing to the last user message.
+ */
+export function serializeTraeConversation(messages: readonly TraeRemoteInputMessage[]): string {
+  if (messages.length === 1 && messages[0]?.role === 'user') return messages[0].content
+  return messages.map(message => `<dsh-message role="${message.role}">\n${message.content}\n</dsh-message>`).join('\n\n')
+}
+
 function decodeUserId(token: string): string {
   try {
     const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64').toString('utf8')) as { data?: { id?: string } }
@@ -108,18 +124,18 @@ export class TraeSoloRemoteClient {
     }
   }
 
-  async chat(messages: readonly { role: string; content: string }[], model: string, signal?: AbortSignal): Promise<{ content: string; sessionId: string }> {
+  async chat(messages: readonly TraeRemoteInputMessage[], model: string, signal?: AbortSignal): Promise<{ content: string; sessionId: string }> {
     const headers = await this.headers()
     const token = (await this.options.credential()).accessToken
     const userId = decodeUserId(token)
     const webId = generateWebId()
     const modelInfo = TRAE_SOLO_REMOTE_MODELS.find(m => m.name.toLowerCase() === model.toLowerCase()) ?? { name: model, displayName: model, multimodal: false }
-    const lastUser = [...messages].reverse().find(m => m.role === 'user' && m.content)?.content ?? ''
+    const conversation = serializeTraeConversation(messages)
     const body = {
       mode: 'code', environment_id: 'default', env: 'remote', auto_create_project: false, origin: 'web',
       initial_message: {
         chat_session_id: '', content: [],
-        query: JSON.stringify([{ type: 'text', data: { content: lastUser } }]),
+        query: JSON.stringify([{ type: 'text', data: { content: conversation } }]),
         model_name: modelInfo.name, agent_type: 'solo_agent_remote', model_selection_strategy: 'manual',
         custom_model: { name: modelInfo.name, multimodal: modelInfo.multimodal, is_default: false, display_name: modelInfo.displayName, config_name: modelInfo.name, config_source: 1, provider: '', ak: '', sk: '', base_url: '', auth_type: 0, use_remote_service: true },
         common_params: buildCommonParams(userId, webId),
