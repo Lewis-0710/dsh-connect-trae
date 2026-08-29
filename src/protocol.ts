@@ -46,6 +46,28 @@ export function buildTraeAgentTaskBody(
 
 export type TraeHeaderProfile = 'agent-task' | 'model-detail' | 'raw-chat' | 'native-curl'
 
+/**
+ * Numeric version code sent when the persisted build version is not a plain
+ * integer. The upstream binds `x-app-version-code` / `x-ide-version-code` as a
+ * number: Trae stores `iCubeLastVersion` as a dotted build string (observed
+ * `2.3.76922` on TRAE SOLO CN 0.1.56), which the server rejects with
+ * `4001 ... expr_path=app_version_code, cause=parameter type does not match
+ * binding data`. Verified 2026-08-29: with a numeric code the same request
+ * returns HTTP 200 + `text/event-stream` on
+ * `/api/agent/v3/llm_utils_chat` (`solo_work_lite`).
+ *
+ * Only the *format* of this field is normalised. Machine, device and app
+ * version stay exactly as persisted — nothing here impersonates a device.
+ */
+export const TRAE_VERSION_CODE_FALLBACK = '20260716'
+
+/** Keep a purely numeric build version; fall back when it cannot bind. */
+export function normalizeTraeVersionCode(buildVersion: string | undefined): string {
+  if (buildVersion === undefined || buildVersion.trim() === '') return TRAE_VERSION_CODE_FALLBACK
+  const trimmed = buildVersion.trim()
+  return /^\d+$/.test(trimmed) ? trimmed : TRAE_VERSION_CODE_FALLBACK
+}
+
 export function buildTraeCnHeaders(
   credential: TraeCredential,
   identity: TraeIdentity,
@@ -64,6 +86,9 @@ export function buildTraeCnHeaders(
     'User-Agent': `Trae/${identity.appVersion ?? identity.buildVersion ?? 'unknown'}`,
     'x-app-id': options.appId ?? '6eefa01c-1036-4c7e-9ca5-d891f63bfcd8',
     ...identityHeaders(identity),
+    // The upstream binds these as numbers; a dotted build string is rejected.
+    'x-app-version-code': normalizeTraeVersionCode(identity.buildVersion),
+    'x-ide-version-code': normalizeTraeVersionCode(identity.buildVersion),
     'x-custom-trace-id': traceId,
     'x-flow-traceparent': `04-${traceId}-${traceId.slice(0, 16)}-01`,
     'request-traffic-type': 'prod',

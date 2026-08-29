@@ -30,9 +30,11 @@ export interface TraeUsagePack {
   entitlementId: string
   endTimeMs: number
   currency: number
+  /** 0 = non-Work/general endpoint, 1 = Work endpoint. */
+  availableEndpoint?: number
   creditsLimit?: number
-  /** Remaining credits for this pack (usage.credits_amount). */
-  remainingCredits?: number
+  /** Credits consumed from this pack (`usage.credits_amount`). */
+  consumedCredits?: number
 }
 
 export interface TraeUsageSnapshot {
@@ -90,14 +92,16 @@ function parseUsageSnapshot(payload: Record<string, unknown>): TraeUsageSnapshot
     const packageExtra = productExtra?.['package_extra'] as Record<string, unknown> | undefined
     const packageQuota = packageExtra?.['quota'] as Record<string, unknown> | undefined
     const creditsLimit = asNumber(packageQuota?.['credits_limit']) ?? asNumber(quota?.['credits_limit'])
-    const remainingCredits = asNumber(usage?.['credits_amount'])
+    const consumedCredits = asNumber(usage?.['credits_amount'])
+    const availableEndpoint = asNumber(base?.['available_endpoint'])
     packs.push({
       displayDesc: typeof pack['display_desc'] === 'string' ? pack['display_desc'] : '',
       entitlementId: typeof base?.['entitlement_id'] === 'string' ? base['entitlement_id'] : '',
       endTimeMs: asNumber(base?.['end_time']) ?? 0,
       currency: asNumber(base?.['currency']) ?? 0,
+      ...availableEndpoint === undefined ? {} : { availableEndpoint },
       ...creditsLimit === undefined ? {} : { creditsLimit },
-      ...remainingCredits === undefined ? {} : { remainingCredits },
+      ...consumedCredits === undefined ? {} : { consumedCredits },
     })
   }
   return {

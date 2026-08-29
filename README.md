@@ -19,21 +19,22 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/dingminhua/dsh-connect-trae?style=flat-square" alt="MIT license"></a>
 </p>
 
-一个独立的 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle 插件。它把本机已登录的 Trae 账号通过新版 SOLO 远程会话通道接到 DSH 的模型选择器，并提供**只读**的用量/积分概览（`web_user_ent_usage`、每日签到、奖励活动）。
+一个独立的 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle 插件。它把本机已登录的 Trae 中国区账号接到 DSH 的模型选择器：模型负责生成结构化工具调用，`bash` / `read` / `write` / `edit` 等工具由 DSH 本地执行；同时提供**只读**的 Work/通用积分与模型管理界面。
 
 ## 效果预览
 
 <p align="center">
-  <img src="docs/assets/dsh-connect-trae-usage-card.png" alt="DSH Connect Trae 插件卡片：当前 Trae 账号登录状态与额度概览" width="900">
+  <img src="docs/assets/dsh-connect-trae-usage-card.png" alt="DSH Connect Trae 插件卡片：Trae 账号、Work 与通用积分以及模型管理" width="900">
 </p>
 
-<p align="center"><sub>设置 → 插件配置 → DSH Connect Trae：读取当前登录的 Trae 账号并显示可用、消耗与合计额度。</sub></p>
+<p align="center"><sub>设置 → 插件配置 → DSH Connect Trae：切换本机 Trae 账号、查看 Work/通用积分，并管理 DSH 中启用的 Trae 模型。</sub></p>
 
 ## 功能特性
 
 - **Trae 模型接入** —— 把本机登录的 Trae 模型注册为 DSH 的 `trae` provider，模型选择器出现 `DeepSeek-V4-Flash`、`DeepSeek-V4-Pro` 等。
-- **新版 SOLO 远程会话** —— 走 `solo.trae.cn/api/remote/v1` 通道创建会话并轮询最终回答。
-- **只读用量概览** —— 插件设置面板（设置 → 插件配置 → DSH Connect Trae）里展开卡片即可查看总可用额度、各项积分来源（老用户/签到/登录赠送）、每日签到状态与奖励活动规则；只读、不消耗 Trae 积分。
+- **DSH 本地工具循环** —— 通过 Trae `llm_utils_chat` 获取待执行的结构化 `tool_calls`，交由 DSH 自带的本地工具执行，再将工具结果回传模型。
+- **中国区多账号切换** —— 自动发现 Trae CN 与 TRAE SOLO CN 本地登录账号，支持重新读取 Token 列表并选择账号；Token 不写入 DSH 设置。
+- **只读积分与模型管理** —— 插件设置面板可分别查看 Work 积分与 DSH 可使用的通用积分，并刷新/启用 Trae 模型；只读查询不消耗积分。
 - **安全 loopback shim** —— 随机端口 + 进程内随机 secret，真实 Trae token 不交给 pi-ai。
 
 ## 工作原理
@@ -41,11 +42,11 @@
 ```text
 DSH PiAiAdapter
   -> 安全 loopback shim
-  -> TraeSoloRemoteBridge
-  -> TraeSoloRemoteClient
-  -> https://solo.trae.cn/api/remote/v1/chat_sessions
-  -> 轮询 /chat_sessions/:id/messages
-  -> 提取最终回答 -> OpenAI SSE -> DSH
+  -> TraeSoloBridge
+  -> https://trae-api-cn.mchost.guru/api/agent/v3/llm_utils_chat
+  -> Trae SSE / pending function_call
+  -> OpenAI SSE tool_calls
+  -> DSH 本地执行工具并回传结果
 ```
 
 用量概览走 `https://api.trae.cn/trae/api/v2/pay/*` 与 `/trae/api/v2/ug/*` 只读接口。

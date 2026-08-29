@@ -8,6 +8,8 @@
 export const TRAE_USAGE_PATH = '/plugins/dsh-connect-trae/usage'
 /** Plugin-owned live model refresh endpoint. */
 export const TRAE_MODELS_REFRESH_PATH = '/plugins/dsh-connect-trae/models/refresh'
+/** Plugin-owned local account rescan endpoint. */
+export const TRAE_ACCOUNTS_REFRESH_PATH = '/plugins/dsh-connect-trae/accounts/refresh'
 
 /** One credit pack and its remaining credit. */
 export interface TraeWebCreditAccount {
@@ -21,6 +23,8 @@ export interface TraeWebCredits {
   total: number
   consumed: number
   available: number
+  workAvailable: number
+  generalAvailable: number
   accounts: readonly TraeWebCreditAccount[]
 }
 
@@ -57,13 +61,24 @@ export interface TraeWebActivity {
   generalCredits?: number
 }
 
+export interface TraeWebAccount {
+  id: string
+  accountName: string
+  edition: 'cn' | 'sg' | 'solo' | 'solo-sg'
+  source: 'desktop' | 'dsh'
+  tokenExpiresAtMs: number
+  selected: boolean
+}
+
 /** The JSON document the plugin card renders. */
 export type TraeWebUsage =
-  | { status: 'signed-out' }
+  | { status: 'signed-out'; accounts: readonly TraeWebAccount[]; message?: string }
   | {
     status: 'signed-in'
+    accountId: string
     accountName: string
     tokenExpiresAtMs: number
+    accounts: readonly TraeWebAccount[]
     models: readonly TraeWebModel[]
     enabledModelIds: readonly string[]
     enabled1mModelIds: readonly string[]

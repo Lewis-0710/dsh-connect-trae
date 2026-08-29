@@ -8,9 +8,9 @@ import { TRAE_AUTH_STORAGE_KEY } from '../src/decrypt.ts'
 const cleanup: string[] = []
 afterEach(async () => { await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
 
-function storage(token: string, expiresAt: number, refreshExpiresAt = Date.now() + 86_400_000): string {
+function storage(token: string, expiresAt: number, refreshExpiresAt = Date.now() + 86_400_000, userId = 'uid'): string {
   return JSON.stringify({ [TRAE_AUTH_STORAGE_KEY]: JSON.stringify({
-    token, refreshToken: 'rt', userId: 'uid', host: 'https://api.trae.cn', expiredAt: new Date(expiresAt).toISOString(), refreshExpiredAt: new Date(refreshExpiresAt).toISOString(),
+    token, refreshToken: 'rt', userId, account: { username: userId }, host: 'https://api.trae.cn', expiredAt: new Date(expiresAt).toISOString(), refreshExpiredAt: new Date(refreshExpiresAt).toISOString(),
   }) })
 }
 
@@ -69,6 +69,57 @@ describe('TraeCredentialStore', () => {
     await writeFile(expired, storage('dead', Date.now() - 1000, Date.now() - 1000))
     const rejected = new TraeCredentialStore({ storagePath: expired, edition: 'cn', ownPath: join(dir, 'own-b'), refresh: async () => ({ accessToken: 'never', expiresAtMs: Date.now() + 1000 }) })
     await expect(rejected.resolve()).rejects.toThrow(/no valid refresh token/)
+  })
+
+  it('discovers multiple local editions and selects by stable account id', async () => {
+    const dir = await temp()
+    const cn = join(dir, 'cn.json'); const solo = join(dir, 'solo.json')
+    await writeFile(cn, storage('cn-token', Date.now() + 3_600_000, undefined, 'cn-user'))
+    await writeFile(solo, storage('solo-token', Date.now() + 3_600_000, undefined, 'solo-user'))
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [{ edition: 'cn', path: cn }, { edition: 'solo', path: solo }]
+    const accounts = await store.accounts()
+    expect(accounts).toHaveLength(2)
+    expect(accounts.map(account => account.accountName)).toEqual(['cn-user', 'solo-user'])
+    store.selectAccount(accounts[1]!.id)
+    await expect(store.resolve()).resolves.toMatchObject({ userId: 'solo-user', accessToken: 'solo-token' })
+    expect((await store.accounts())[1]?.selected).toBe(true)
+  })
+
+  it('prefers a general-credit account when none is explicitly selected', async () => {
+    const dir = await temp()
+    const cn = join(dir, 'cn.json'); const solo = join(dir, 'solo.json')
+    await writeFile(cn, storage('cn-token', Date.now() + 3_600_000, undefined, 'cn-user'))
+    await writeFile(solo, storage('solo-token', Date.now() + 3_600_000, undefined, 'solo-user'))
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [{ edition: 'cn', path: cn }, { edition: 'solo', path: solo }]
+    const soloId = (await store.accounts()).find(account => account.accountName === 'solo-user')!.id
+    store.setPreferAccountIds([soloId])
+    await expect(store.current()).resolves.toMatchObject({ userId: 'solo-user' })
+    expect((await store.accounts()).find(account => account.accountName === 'solo-user')?.selected).toBe(true)
+  })
+
+  it('auto mode includes CN editions only', () => {
+    const store = new TraeCredentialStore({ ownPath: '/tmp/unused-trae-own', refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    expect(store.candidates().map(candidate => candidate.edition)).toEqual(['cn', 'solo'])
+  })
+
+  it('skips a malformed edition instead of hiding valid accounts', async () => {
+    const dir = await temp()
+    const bad = join(dir, 'bad.json'); const good = join(dir, 'good.json')
+    await writeFile(bad, '{broken')
+    await writeFile(good, storage('good-token', Date.now() + 3_600_000, undefined, 'good-user'))
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [{ edition: 'cn', path: bad }, { edition: 'solo', path: good }]
+    await expect(store.accounts()).resolves.toMatchObject([{ accountName: 'good-user', edition: 'solo' }])
+  })
+
+  it('falls back when the saved account no longer exists', async () => {
+    const dir = await temp(); const file = join(dir, 'current.json')
+    await writeFile(file, storage('current-token', Date.now() + 3_600_000, undefined, 'current-user'))
+    const store = new TraeCredentialStore({ storagePath: file, edition: 'solo', accountId: 'removed-account', ownPath: join(dir, 'own'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    await expect(store.resolve()).resolves.toMatchObject({ userId: 'current-user' })
+    expect(await store.accounts()).toMatchObject([{ accountName: 'current-user', selected: true }])
   })
 
   it('reports signed out for a missing explicit file', async () => {

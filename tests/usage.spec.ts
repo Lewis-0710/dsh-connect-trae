@@ -38,6 +38,7 @@ describe('TraeUsageClient', () => {
             entitlement_id: '326737122050',
             end_time: 1788340660,
             currency: 1,
+            available_endpoint: 1,
             quota: { credits_limit: 2000 },
             product_extra: { package_extra: { quota: { credits_limit: 2000 } } },
           },
@@ -49,6 +50,7 @@ describe('TraeUsageClient', () => {
             entitlement_id: 'checkin_20260820_x',
             end_time: 1789837484,
             currency: 1,
+            available_endpoint: 0,
             product_extra: { package_extra: { quota: { credits_limit: 200 } } },
           },
           usage: { credits_amount: 179.6288 },
@@ -61,8 +63,8 @@ describe('TraeUsageClient', () => {
     expect(snapshot.isCreditsBilling).toBe(true)
     expect(snapshot.summary).toEqual({ totalAmount: 7500, consumedAmount: 5879.63, consumptionRatio: 0.7839506666666667 })
     expect(snapshot.packs).toHaveLength(2)
-    expect(snapshot.packs[0]).toMatchObject({ displayDesc: '老用户福利', creditsLimit: 2000, remainingCredits: 2000 })
-    expect(snapshot.packs[1]).toMatchObject({ displayDesc: '签到奖励', creditsLimit: 200, remainingCredits: 179.6288 })
+    expect(snapshot.packs[0]).toMatchObject({ displayDesc: '老用户福利', availableEndpoint: 1, creditsLimit: 2000, consumedCredits: 2000 })
+    expect(snapshot.packs[1]).toMatchObject({ displayDesc: '签到奖励', availableEndpoint: 0, creditsLimit: 200, consumedCredits: 179.6288 })
   })
 
   it('parses check-in status', async () => {

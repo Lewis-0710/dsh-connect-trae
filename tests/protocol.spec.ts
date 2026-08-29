@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildTraeAgentTaskBody, buildTraeCnHeaders, TRAE_CN_AGENT_TASK_PATH, TRAE_CN_TITLE_PATH, traeEndpoint } from '../src/protocol.ts'
+import { buildTraeAgentTaskBody, buildTraeCnHeaders, normalizeTraeVersionCode, TRAE_CN_AGENT_TASK_PATH, TRAE_CN_TITLE_PATH, TRAE_VERSION_CODE_FALLBACK, traeEndpoint } from '../src/protocol.ts'
 import type { TraeCredential } from '../src/auth.ts'
 import type { TraeIdentity } from '../src/identity.ts'
 
@@ -61,6 +61,27 @@ describe('Trae CN protocol draft', () => {
     expect(headers).not.toHaveProperty('x-plugin-channel')
     expect(headers).not.toHaveProperty('User-Agent')
     expect(headers).not.toHaveProperty('Accept')
+  })
+
+  it('sends a bindable numeric version code even when Trae persists a dotted build', () => {
+    // TRAE SOLO CN 0.1.56 stores iCubeLastVersion as "2.3.76922"; the upstream
+    // binds the version code as a number and rejects that with 4001.
+    const dotted: TraeIdentity = { ...identity, buildVersion: '2.3.76922' }
+    const headers = buildTraeCnHeaders(credential, dotted, { requestId: 'dotted' })
+    expect(headers['x-app-version-code']).toBe(TRAE_VERSION_CODE_FALLBACK)
+    expect(headers['x-ide-version-code']).toBe(TRAE_VERSION_CODE_FALLBACK)
+    // Everything else stays truthful: no device impersonation.
+    expect(headers['x-machine-id']).toBe('machine-stable')
+    expect(headers['x-device-id']).toBe('device-stable')
+    expect(headers['x-ide-version']).toBe('3.3.79')
+  })
+
+  it('keeps an already numeric build version as-is', () => {
+    const numeric: TraeIdentity = { ...identity, buildVersion: '20260716' }
+    expect(buildTraeCnHeaders(credential, numeric)['x-app-version-code']).toBe('20260716')
+    expect(normalizeTraeVersionCode('20260716')).toBe('20260716')
+    expect(normalizeTraeVersionCode(undefined)).toBe(TRAE_VERSION_CODE_FALLBACK)
+    expect(normalizeTraeVersionCode('')).toBe(TRAE_VERSION_CODE_FALLBACK)
   })
 
   it('refuses to reuse the CN request contract for SG', () => {

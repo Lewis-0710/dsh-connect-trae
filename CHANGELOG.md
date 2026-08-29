@@ -1,16 +1,20 @@
 # Changelog
 
-## 1.0.0 (2026-08-28)
+## 1.0.0 (2026-08-30)
 
 ### Features
 
-- 首个稳定版本：将本机当前登录的 Trae 模型接入 DSH，并通过安全 loopback shim 提供模型调用。
-- 提供 DSH Connect Trae 插件卡片，展示当前登录账号名、访问令牌过期时间、可用额度、已消耗额度和总额度；卡片底部提供「鼓励一下 ★」GitHub 链接。
-- 支持 Trae SOLO 远程会话、模型目录、只读用量接口及中英文界面。
+- 首个稳定版本：将本机当前登录的 Trae 中国区模型接入 DSH，并通过安全 loopback shim 提供模型调用。
+- 接入 `llm_utils_chat` 原生函数调用通道，将 Trae `function_call` 转换为 DSH 可执行的 OpenAI `tool_calls`，支持工具结果回传与连续 Agent 循环。
+- 自动发现 Trae CN / TRAE SOLO CN 本地登录账号，支持刷新 Token 列表、选择账号，并优先使用具有通用积分的账号。
+- 提供 DSH Connect Trae 插件卡片，分别展示 Work 积分与 DSH 可使用的通用积分，并支持模型目录刷新和启用选择。
+- 支持 DeepSeek-V4-Flash 等 Trae 模型、只读用量接口及中英文界面。
 
 ### Fixes
 
-- 凭据选择始终优先使用 Trae 客户端当前登录账号；插件自有缓存仅在桌面凭据不可用时回退，避免显示历史账号的积分。
+- 凭据选择优先使用可供 `llm_utils_chat` 计费的通用积分账号；单个损坏、过期或已退出的本地凭据不会阻断其他账号。
+- 规范化 DSH 的 `developer` 消息角色为 Trae 接受的 `system`，避免模型请求持续 400 重试。
+- 正确处理 Trae 流式错误事件，配额错误不再被误报为 `EMPTY_RESPONSE`。
 
 ### Docs
 

@@ -28,6 +28,10 @@ export function prepareSoloBody(source: string, defaultModel = 'glm-5.2'): strin
     for (const raw of body['messages']) {
       if (typeof raw !== 'object' || raw === null) continue
       const message = raw as Record<string, unknown>
+      // DSH sends the system prompt as the OpenAI `developer` role, which the
+      // Trae `llm_utils_chat` upstream rejects with a 400 (it accepts only
+      // system / assistant / user / tool / function). Normalise it.
+      if (message['role'] === 'developer') message['role'] = 'system'
       if (typeof message['content'] === 'string') message['content'] = [{ type: 'text', text: message['content'] }]
       if (message['role'] === 'assistant' && Array.isArray(message['tool_calls'])) {
         for (const rawCall of message['tool_calls']) {
@@ -37,6 +41,12 @@ export function prepareSoloBody(source: string, defaultModel = 'glm-5.2'): strin
             call['function_call'] = call['function']
             delete call['function']
           }
+        }
+      }
+      if (message['role'] === 'tool') {
+        message['role'] = 'tool'
+        if (typeof message['tool_call_id'] !== 'string' || message['tool_call_id'] === '') {
+          throw new Error('Trae SOLO tool message requires tool_call_id')
         }
       }
     }

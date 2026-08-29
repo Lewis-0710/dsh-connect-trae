@@ -16,7 +16,7 @@ import type { TraeCredentialStore } from './auth.ts'
 import type { TraeModelInfo } from './catalog.ts'
 import type { TraeUsageClient } from './usage.ts'
 import type { TraeRawDiagnostic } from './raw-diagnostic.ts'
-import { TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from './status-paths.ts'
+import { TRAE_ACCOUNTS_REFRESH_PATH, TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from './status-paths.ts'
 import type { TraeWebCredits, TraeWebUsage } from './status-paths.ts'
 
 export { TRAE_USAGE_PATH } from './status-paths.ts'
@@ -63,14 +63,27 @@ function loopbackOrigin(req: IncomingMessage): boolean {
 }
 
 /** Map the credit snapshot to the card's compact credit document. */
-function toCredits(snapshot: { summary: { totalAmount: number; consumedAmount: number }; packs: { displayDesc: string; remainingCredits?: number; creditsLimit?: number }[] }): TraeWebCredits {
+function toCredits(snapshot: { summary: { totalAmount: number; consumedAmount: number }; packs: { displayDesc: string; availableEndpoint?: number; consumedCredits?: number; creditsLimit?: number }[] }): TraeWebCredits {
   const { totalAmount, consumedAmount } = snapshot.summary
+  const credit = (value: number): number => Math.round(value * 10_000) / 10_000
   const accounts = snapshot.packs.map(pack => ({
     displayDesc: pack.displayDesc,
-    remain: pack.remainingCredits ?? 0,
+    remain: credit(Math.max(0, (pack.creditsLimit ?? 0) - (pack.consumedCredits ?? 0))),
     size: pack.creditsLimit ?? 0,
   }))
-  return { total: totalAmount, consumed: consumedAmount, available: totalAmount - consumedAmount, accounts }
+  // `usage.credits_amount` is consumed credit, not remaining balance. Derive
+  // each bucket's balance from its quota, matching total - consumed upstream.
+  const remaining = (endpoint: number): number => snapshot.packs
+    .filter(pack => pack.availableEndpoint === endpoint)
+    .reduce((sum, pack) => credit(sum + Math.max(0, (pack.creditsLimit ?? 0) - (pack.consumedCredits ?? 0))), 0)
+  return {
+    total: totalAmount,
+    consumed: consumedAmount,
+    available: totalAmount - consumedAmount,
+    workAvailable: remaining(1),
+    generalAvailable: remaining(0),
+    accounts,
+  }
 }
 
 /**
@@ -79,14 +92,25 @@ function toCredits(snapshot: { summary: { totalAmount: number; consumedAmount: n
  * failing the whole document.
  */
 export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWebUsage> {
+  const accounts = await deps.store.accounts()
   const authStatus = await deps.store.status()
-  if (authStatus.state !== 'signed-in') return { status: 'signed-out' }
-  const credential = await deps.store.resolve()
+  if (authStatus.state !== 'signed-in') return { status: 'signed-out', accounts }
+  let credential
+  try {
+    credential = await deps.store.resolve()
+  } catch (error: unknown) {
+    // Account selection must remain available even when the selected token is
+    // expired or its refresh request fails. Report that as account-level status
+    // instead of converting the entire route into HTTP 500.
+    return { status: 'signed-out', accounts, message: safeMessage(error) }
+  }
   // Only user-facing identity and expiry cross to the browser. Token material
   // and stable user IDs stay on the Host.
   const account = {
+    accountId: accounts.find(item => item.selected)?.id ?? '',
     accountName: credential.accountName ?? credential.userId,
     tokenExpiresAtMs: credential.expiresAtMs,
+    accounts,
     models: deps.displayModels().map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
     enabledModelIds: [...deps.enabledModelIds()],
     enabled1mModelIds: [...deps.enabled1mModelIds()],
@@ -122,6 +146,19 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         }
       },
     })
+    const disposeAccounts = ctx.webServer.register({
+      kind: 'exact',
+      path: TRAE_ACCOUNTS_REFRESH_PATH,
+      handler: async (req: IncomingMessage, res: ServerResponse) => {
+        if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+        if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
+        try {
+          json(res, 200, { accounts: await deps.store.accounts() })
+        } catch (error: unknown) {
+          json(res, 500, { error: safeMessage(error) })
+        }
+      },
+    })
     const disposeRefresh = ctx.webServer.register({
       kind: 'exact',
       path: TRAE_MODELS_REFRESH_PATH,
@@ -139,6 +176,7 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
     })
     return () => {
       disposeRefresh()
+      disposeAccounts()
       disposeUsage()
     }
   }, 'dsh-connect-trae: Web usage route')

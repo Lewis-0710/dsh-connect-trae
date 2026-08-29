@@ -10,7 +10,7 @@ import { createElement as h } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from '../status-paths.ts'
+import { TRAE_ACCOUNTS_REFRESH_PATH, TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from '../status-paths.ts'
 import type { TraeWebModel, TraeWebUsage } from '../status-paths.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
@@ -47,7 +47,10 @@ if (typeof document !== 'undefined') {
 }
 
 function formatNumber(value: number): string {
-  return new Intl.NumberFormat(undefined).format(value)
+  return new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(value)
 }
 
 function formatDateTime(value: number): string {
@@ -78,13 +81,14 @@ function dotStyle(status: TraeWebUsage['status']): Record<string, string> {
 export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   if (t === undefined) throw new Error('Trae usage card requires its translation function')
   const [open, setOpen] = useState(false)
-  const [status, setStatus] = useState<TraeWebUsage>({ status: 'signed-out' })
+  const [status, setStatus] = useState<TraeWebUsage>({ status: 'signed-out', accounts: [] })
   const [busy, setBusy] = useState(false)
   const [settingsRevision, setSettingsRevision] = useState(0)
   const [draftModels, setDraftModels] = useState<TraeWebModel[] | undefined>(undefined)
   const [draftEnabledIds, setDraftEnabledIds] = useState<Set<string> | undefined>(undefined)
   const [draft1mIds, setDraft1mIds] = useState<Set<string> | undefined>(undefined)
   const [saving, setSaving] = useState(false)
+  const [switchingAccount, setSwitchingAccount] = useState(false)
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -94,7 +98,7 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
 
   useEffect(() => settingsScope?.subscribe(() => { setSettingsRevision(value => value + 1) }), [settingsScope])
 
-  const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
+  const refreshUsage = useCallback(async (signal?: AbortSignal): Promise<TraeWebUsage | undefined> => {
     try {
       const response = await fetch(TRAE_USAGE_PATH, {
         headers: { accept: 'application/json' },
@@ -104,36 +108,62 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
       const value: unknown = await response.json().catch(() => undefined)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       if (mounted.current && signal?.aborted !== true) setStatus(value as TraeWebUsage)
+      return value as TraeWebUsage
     } catch (error: unknown) {
       if (mounted.current && signal?.aborted !== true) {
         setStatus({ status: 'error', message: error instanceof Error ? error.message : t('row.requestFailed') })
       }
+      return undefined
     }
   }, [t])
 
   useEffect(() => {
     if (!open) return
     const controller = new AbortController()
-    void refresh(controller.signal)
+    void refreshUsage(controller.signal)
     return () => { controller.abort() }
-  }, [open, refresh])
+  }, [open, refreshUsage])
 
   useEffect(() => {
     if (!open || status.status !== 'signed-in') return
     const controller = new AbortController()
-    const timer = window.setInterval(() => { void refresh(controller.signal) }, POLL_INTERVAL_MS)
+    const timer = window.setInterval(() => { void refreshUsage(controller.signal) }, POLL_INTERVAL_MS)
     return () => {
       window.clearInterval(timer)
       controller.abort()
     }
-  }, [open, refresh, status.status])
+  }, [open, refreshUsage, status.status])
 
-  const manualRefresh = async (): Promise<void> => {
+  const rescanAccounts = async (): Promise<void> => {
     setBusy(true)
     try {
-      await refresh()
+      const response = await fetch(TRAE_ACCOUNTS_REFRESH_PATH, {
+        method: 'POST', headers: { accept: 'application/json' }, credentials: 'same-origin',
+      })
+      const body = await response.json() as { accounts?: { id: string; selected: boolean }[] }
+      if (!response.ok || !Array.isArray(body.accounts)) throw new Error(`HTTP ${response.status}`)
+      const selected = body.accounts.find(account => account.selected)?.id
+      const configured = settingsScope?.getSnapshot().value
+      const configuredId = typeof configured === 'object' && configured !== null && typeof (configured as { accountId?: unknown }).accountId === 'string'
+        ? (configured as { accountId: string }).accountId
+        : undefined
+      if (selected !== undefined && selected !== configuredId && settingsScope?.getSnapshot().writable === true) {
+        await settingsScope.set('accountId', selected)
+      }
+      await refreshUsage()
     } finally {
       if (mounted.current) setBusy(false)
+    }
+  }
+
+  const switchAccount = async (accountId: string): Promise<void> => {
+    if (settingsScope === undefined) return
+    setSwitchingAccount(true)
+    try {
+      await settingsScope.set('accountId', accountId)
+      await refreshUsage()
+    } finally {
+      if (mounted.current) setSwitchingAccount(false)
     }
   }
 
@@ -215,7 +245,7 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
       await settingsScope.set('enabledModelIds', [...activeEnabledIds])
       await settingsScope.set('enabled1mModels', [...active1mIds].filter(id => activeEnabledIds.has(id)))
       discardModels()
-      await refresh()
+      await refreshUsage()
     } finally {
       if (mounted.current) setSaving(false)
     }
@@ -268,27 +298,45 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                   type="button"
                   className="dsm-btn dsm-btn-outline"
                   disabled={busy}
-                  onClick={() => { void manualRefresh() }}
+                  onClick={() => { void rescanAccounts() }}
                 >
-                  {busy ? t('row.refreshing') : t('row.refresh')}
+                  {busy ? t('row.accountsScanning') : t('row.refreshTokens')}
                 </button>
               </div>
+              {status.status !== 'error' && status.accounts.length > 0
+                ? <section className="dsm-trae-account-picker" aria-label={t('row.accountsTitle')}>
+                    <div className="dsm-trae-usage-select-wrap">
+                      <select
+                        className="dsm-trae-usage-select"
+                        value={status.status === 'signed-in' ? status.accountId : ''}
+                        disabled={switchingAccount || settingsScope?.getSnapshot().writable !== true}
+                        onChange={event => { void switchAccount(event.currentTarget.value) }}
+                      >
+                        {status.accounts.map(account => <option key={account.id} value={account.id}>{account.accountName} · {account.edition}</option>)}
+                      </select>
+                    </div>
+                  </section>
+                : null}
               {status.status === 'signed-in'
                 ? <>
                     {status.credits === undefined ? null : (
                       <div className="dsm-trae-usage-list">
-                        <div className="dsm-trae-usage-stats">
-                          <div className="dsm-trae-usage-stat">
-                            <span className="dsm-trae-usage-stat-label">{t('row.creditsAvailableLabel')}</span>
-                            <span className="dsm-trae-usage-stat-value">{formatNumber(status.credits.available)}</span>
+                        <div className="dsm-trae-usage-stats dsm-trae-usage-stats-two">
+                          <div className="dsm-trae-usage-stat dsm-trae-usage-stat-work">
+                            <div className="dsm-trae-usage-stat-head">
+                              <span className="dsm-trae-usage-stat-label">{t('row.workCreditsLabel')}</span>
+                              <span className="dsm-trae-usage-stat-badge dsm-trae-usage-stat-badge-off">{t('row.workNotUsable')}</span>
+                            </div>
+                            <span className="dsm-trae-usage-stat-value dsm-trae-usage-stat-value-work">{formatNumber(status.credits.workAvailable)}</span>
+                            <span className="dsm-trae-usage-stat-hint">{t('row.workUsableHint')}</span>
                           </div>
-                          <div className="dsm-trae-usage-stat">
-                            <span className="dsm-trae-usage-stat-label">{t('row.creditsConsumedLabel')}</span>
-                            <span className="dsm-trae-usage-stat-value">{formatNumber(status.credits.consumed)}</span>
-                          </div>
-                          <div className="dsm-trae-usage-stat">
-                            <span className="dsm-trae-usage-stat-label">{t('row.creditsTotalLabel')}</span>
-                            <span className="dsm-trae-usage-stat-value">{formatNumber(status.credits.total)}</span>
+                          <div className="dsm-trae-usage-stat dsm-trae-usage-stat-general">
+                            <div className="dsm-trae-usage-stat-head">
+                              <span className="dsm-trae-usage-stat-label">{t('row.generalCreditsLabel')}</span>
+                              <span className="dsm-trae-usage-stat-badge dsm-trae-usage-stat-badge-on">{t('row.generalUsable')}</span>
+                            </div>
+                            <span className="dsm-trae-usage-stat-value dsm-trae-usage-stat-value-general">{formatNumber(status.credits.generalAvailable)}</span>
+                            <span className="dsm-trae-usage-stat-hint">{t('row.generalUsableHint')}</span>
                           </div>
                         </div>
                       </div>
@@ -364,7 +412,7 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                     </section>
                   </>
                 : null}
-              {status.status === 'signed-out' ? <p className="dsm-trae-usage-text">{t('row.signedOutHint')}</p> : null}
+              {status.status === 'signed-out' ? <p className="dsm-trae-usage-text">{status.message ?? t('row.signedOutHint')}</p> : null}
               {status.status === 'error' ? <p className="dsm-trae-usage-error">{status.message}</p> : null}
               <div className="dsm-trae-usage-footer">
                 <div className="dsm-trae-usage-footer-left">

@@ -1,4 +1,5 @@
 import { readFile, rm, stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
@@ -28,9 +29,19 @@ export interface TraeRefreshOutcome {
 export interface TraeCredentialStoreOptions {
   storagePath?: string
   edition?: TraeEdition | 'auto'
+  accountId?: string
   ownPath?: string
   refresh: (credential: TraeCredential) => Promise<TraeRefreshOutcome>
   refreshMarginMs?: number
+}
+
+export interface TraeAccountChoice {
+  id: string
+  accountName: string
+  edition: TraeEdition
+  source: 'desktop' | 'dsh'
+  tokenExpiresAtMs: number
+  selected: boolean
 }
 
 const OWN_VERSION = 1
@@ -78,6 +89,11 @@ export function normalizeTraeCredential(raw: unknown, edition: TraeEdition, sour
   }
 }
 
+export function traeAccountId(credential: Pick<TraeCredential, 'edition' | 'userId' | 'accountName'>): string {
+  const stable = `${credential.edition}\0${credential.userId || credential.accountName || 'unknown'}`
+  return createHash('sha256').update(stable).digest('hex').slice(0, 24)
+}
+
 function parseOwn(text: string): TraeCredential | undefined {
   try {
     const document = JSON.parse(text) as { version?: unknown; credential?: unknown }
@@ -96,6 +112,8 @@ function parseOwn(text: string): TraeCredential | undefined {
 export class TraeCredentialStore {
   private storagePathOverride: string | undefined
   private edition: TraeEdition | 'auto'
+  private accountId: string | undefined
+  private preferIds: string[] = []
   private readonly ownPath: string
   private readonly refresh: TraeCredentialStoreOptions['refresh']
   private readonly refreshMarginMs: number
@@ -104,14 +122,33 @@ export class TraeCredentialStore {
   constructor(options: TraeCredentialStoreOptions) {
     this.storagePathOverride = options.storagePath
     this.edition = options.edition ?? 'auto'
+    this.accountId = options.accountId
     this.ownPath = options.ownPath ?? traeOwnAuthPath()
     this.refresh = options.refresh
     this.refreshMarginMs = options.refreshMarginMs ?? 5 * 60_000
   }
 
-  setSource(storagePath: string | undefined, edition: TraeEdition | 'auto' = 'auto'): void {
+  setSource(storagePath: string | undefined, edition: TraeEdition | 'auto' = 'auto', accountId?: string): void {
     this.storagePathOverride = storagePath
     this.edition = edition
+    this.accountId = accountId
+    this.inflight = undefined
+  }
+
+  selectAccount(accountId: string | undefined): void {
+    this.accountId = accountId
+    this.inflight = undefined
+  }
+
+  /**
+   * Preferred account ordering used when no account is explicitly selected.
+   * The connector can only bill the `llm_utils_chat` channel against general
+   * credits, so accounts with zero general credits should not become the
+   * default or they fail with 4008 / empty responses.
+   */
+  setPreferAccountIds(ids: readonly string[]): void {
+    this.preferIds = [...ids]
+    this.inflight = undefined
   }
 
   candidates(): TraeStorageCandidate[] {
@@ -120,15 +157,44 @@ export class TraeCredentialStore {
       return [{ edition, path: this.storagePathOverride }]
     }
     const all = traeStorageCandidates()
-    return this.edition === 'auto' ? all : all.filter(candidate => candidate.edition === this.edition)
+    // This connector targets the CN service and Work-credit contracts only.
+    // Ignore SG installations even when they are signed in locally.
+    return this.edition === 'auto'
+      ? all.filter(candidate => candidate.edition === 'cn' || candidate.edition === 'solo')
+      : all.filter(candidate => candidate.edition === this.edition && (candidate.edition === 'cn' || candidate.edition === 'solo'))
+  }
+
+  /** First credential matching the preferred ordering, else the first live one. */
+  private preferred(credentials: TraeCredential[]): TraeCredential | undefined {
+    if (credentials.length === 0) return undefined
+    for (const id of this.preferIds) {
+      const match = credentials.find(credential => traeAccountId(credential) === id)
+      if (match !== undefined) return match
+    }
+    return credentials[0]
+  }
+
+  async accounts(): Promise<TraeAccountChoice[]> {
+    const credentials = await this.readAll()
+    const selectedExists = this.accountId !== undefined && credentials.some(credential => traeAccountId(credential) === this.accountId)
+    const defaultSelected = this.preferred(credentials)
+    return credentials.map(credential => ({
+      id: traeAccountId(credential),
+      accountName: credential.accountName ?? (credential.userId || `${credential.edition} account`),
+      edition: credential.edition,
+      source: credential.source,
+      tokenExpiresAtMs: credential.expiresAtMs,
+      selected: selectedExists ? traeAccountId(credential) === this.accountId : credential === defaultSelected,
+    }))
   }
 
   async current(): Promise<TraeCredential | undefined> {
-    const [desktop, own] = await Promise.all([this.readDesktop(), this.readOwn()])
-    // Prefer the desktop credential: it is the account currently signed in to
-    // the Trae client, so usage/credits always reflect what the user sees.
-    // The own cache is only a fallback when no desktop credential is present.
-    return desktop ?? own
+    const credentials = await this.readAll()
+    if (this.accountId === undefined) return this.preferred(credentials)
+    // A saved account can disappear when Trae replaces its local login. Fall
+    // back to the first live account so the status route remains usable and the
+    // user can select another account instead of being trapped behind HTTP 500.
+    return credentials.find(credential => traeAccountId(credential) === this.accountId) ?? this.preferred(credentials)
   }
 
   async resolve(): Promise<TraeCredential> {
@@ -158,17 +224,28 @@ export class TraeCredentialStore {
     await rm(`${this.ownPath}.lock`, { force: true })
   }
 
-  private async readDesktop(): Promise<TraeCredential | undefined> {
+  private async readAll(): Promise<TraeCredential[]> {
+    const desktop = await this.readDesktopAll()
+    const own = await this.readOwn()
+    const cnOwn = own?.edition === 'cn' || own?.edition === 'solo' ? own : undefined
+    if (cnOwn === undefined || desktop.some(credential => traeAccountId(credential) === traeAccountId(cnOwn))) return desktop
+    return [...desktop, cnOwn]
+  }
+
+  private async readDesktopAll(): Promise<TraeCredential[]> {
+    const credentials: TraeCredential[] = []
     for (const candidate of this.candidates()) {
       try {
         const raw = parseTraeStorageDocument(await readFile(candidate.path, 'utf8'))
-        return normalizeTraeCredential(raw, candidate.edition, 'desktop')
-      } catch (error: unknown) {
-        if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') continue
-        throw error
+        const credential = normalizeTraeCredential(raw, candidate.edition, 'desktop')
+        if (credential !== undefined && !credentials.some(existing => traeAccountId(existing) === traeAccountId(credential))) credentials.push(credential)
+      } catch {
+        // One stale, partially written, unsupported, or signed-out Trae edition
+        // must not hide valid accounts from the other local installations.
+        continue
       }
     }
-    return undefined
+    return credentials
   }
 
   private async readOwn(): Promise<TraeCredential | undefined> {

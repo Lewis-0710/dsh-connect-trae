@@ -130,6 +130,16 @@ export function createTraeShim(options: TraeShimOptions): TraeShim {
         }
         const raw = (await readBody(req)).toString('utf8')
         try { JSON.parse(raw) } catch { return writeError(res, 400, 'invalid_json', 'Request body must be valid JSON') }
+        const parsed = JSON.parse(raw) as { model?: unknown; messages?: unknown[]; tools?: unknown[]; temperature?: unknown; reasoning_effort?: unknown; max_tokens?: unknown }
+        options.logger?.warn('dsh-connect-trae: chat request received', {
+          model: parsed.model,
+          messages: Array.isArray(parsed.messages) ? parsed.messages.map(message => (typeof message === 'object' && message !== null ? (message as Record<string, unknown>)['role'] ?? '?' : '?')) : '(none)',
+          toolCount: Array.isArray(parsed.tools) ? parsed.tools.length : 0,
+          maxTokens: parsed.max_tokens,
+          reasoningEffort: parsed.reasoning_effort,
+          temperature: parsed.temperature,
+          bodyBytes: raw.length,
+        })
         const controller = new AbortController()
         const abort = (): void => controller.abort()
         req.once('aborted', abort)
@@ -143,8 +153,11 @@ export function createTraeShim(options: TraeShimOptions): TraeShim {
           'X-Accel-Buffering': 'no',
         })
         const body = Readable.fromWeb(result.response.body as Parameters<typeof Readable.fromWeb>[0])
-        body.on('error', error => {
-          options.logger?.warn('dsh-connect-trae: upstream stream failed', error)
+        body.on('error', (error: unknown) => {
+          const record = error instanceof Error
+            ? { name: error.name, message: error.message, cause: error.cause ? String(error.cause) : undefined }
+            : String(error)
+          options.logger?.warn('dsh-connect-trae: upstream stream failed', record)
           if (!res.writableEnded) res.end()
         })
         body.pipe(res)

@@ -7,9 +7,12 @@ import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
 import { TraeCredentialStore } from './auth.ts'
 import { deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, TraeCatalog, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential } from './refresh.ts'
+import { readTraeIdentity } from './identity.ts'
+import { traeStorageCandidates } from './paths.ts'
 import { createTraeShim } from './shim.ts'
+import { TraeSoloUpstreamClient } from './solo.ts'
+import { TraeSoloBridge } from './solo-bridge.ts'
 import { TraeSoloRemoteClient } from './solo-remote.ts'
-import { TraeSoloRemoteBridge } from './solo-remote-bridge.ts'
 import { TraeRawChatUpstreamClient } from './raw-upstream.ts'
 import { createTraeRawGateway } from './raw-gateway.ts'
 import { resolveTraeRawRuntime } from './raw-resolver.ts'
@@ -29,7 +32,7 @@ export { parseTraeModelExtraConfigLogLine, parseTraeRawChatBehaviorConfig, type 
 export { buildTraeModelDetailRequest, TRAE_MODEL_DETAIL_FUNCTIONS, TRAE_MODEL_DETAIL_PATH, type TraeModelDetailRequest } from './model-detail.ts'
 export { parseTraeRemoteModel, type TraeDiscoveredModel, type TraeDiscoveredReasoning } from './model-metadata.ts'
 export { traeStorageCandidates, type TraeEdition, type TraeStorageCandidate } from './paths.ts'
-export { buildTraeAgentTaskBody, buildTraeCnHeaders, TRAE_CN_AGENT_TASK_PATH, TRAE_CN_TITLE_PATH, traeEndpoint } from './protocol.ts'
+export { buildTraeAgentTaskBody, buildTraeCnHeaders, normalizeTraeVersionCode, TRAE_CN_AGENT_TASK_PATH, TRAE_CN_TITLE_PATH, TRAE_VERSION_CODE_FALLBACK, traeEndpoint } from './protocol.ts'
 export { buildTraeRawChatDraft, decodeRawChatChunk, TRAE_RAW_CHAT_V1_PATH, TRAE_RAW_CHAT_V2_PATH, type RawChatDelta, type RawChatMessage, type RawChatTool } from './raw-chat.ts'
 export { buildTraeFusionRawChatEnvelope, hashTraeRawChatArg, type TraeFusionRawChatEnvelope } from './raw-envelope.ts'
 export { buildTraeRawChatRuntimeConfig, traeRawChatExtraInfo, type TraeRawChatRuntimeConfig } from './raw-runtime-config.ts'
@@ -47,6 +50,7 @@ export { applyReasoningEffort, parseReasoningCapability, TRAE_REASONING_EFFORTS,
 export { refreshTraeCredential } from './refresh.ts'
 export { decodeTraeEvent, SseDecoder, type SseEvent, type TraeStreamEvent } from './sse.ts'
 export { prepareSoloBody, TraeSoloUpstreamClient, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_FUNCTION, TRAE_SOLO_MODELS_PATH, type TraeSoloClientOptions } from './solo.ts'
+export { bridgeTraeSoloStream, TraeSoloBridge } from './solo-bridge.ts'
 export { TraeSoloRemoteClient, TRAE_SOLO_REMOTE_BASE, TRAE_SOLO_REMOTE_MODELS, type TraeSoloRemoteOptions } from './solo-remote.ts'
 export { TraeSoloRemoteBridge } from './solo-remote-bridge.ts'
 export { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
@@ -63,6 +67,8 @@ export const TRAE_SETTINGS_NS = settingsNamespace('trae')
 export interface Config {
   authFile?: string
   edition?: 'auto' | 'cn' | 'sg' | 'solo' | 'solo-sg'
+  /** Stable local account selector; tokens remain outside settings. */
+  accountId?: string
   /** The last-refreshed Trae raw directory; what the plugin card displays. */
   lastCatalog?: TraeModelInfo[]
   /** The user's ordinary-model selection, as model id (= Trae name). */
@@ -84,6 +90,7 @@ const modelConfig = z.object({
 export const Config: z<Config> = z.object({
   authFile: z.string().description('Optional Trae storage.json path override'),
   edition: z.union(['auto', 'cn', 'sg', 'solo', 'solo-sg']).default('auto').description('Trae edition hint'),
+  accountId: z.string().description('Selected local Trae account id (never a token)'),
   lastCatalog: z.array(modelConfig).description('Last refreshed Trae raw model directory shown by the plugin card') as z<TraeModelInfo[]>,
   enabledModelIds: z.array(z.string()).default([]).description('Trae model ids the user enabled'),
   enabled1mModels: z.array(z.string()).default([]).description('Trae model ids whose 1M variants are enabled'),
@@ -108,10 +115,23 @@ export function apply(ctx: Context, config: Config): void {
   const store = new TraeCredentialStore({
     ...config.authFile === undefined ? {} : { storagePath: config.authFile },
     edition: config.edition ?? 'auto',
+    ...config.accountId === undefined ? {} : { accountId: config.accountId },
     refresh: credential => refreshTraeCredential(credential),
   })
+  const identity = async () => {
+    const candidate = config.authFile === undefined
+      ? traeStorageCandidates().find(item => (item.edition === 'cn' || item.edition === 'solo') && (config.edition === undefined || config.edition === 'auto' || item.edition === config.edition))
+      : { edition: config.edition === undefined || config.edition === 'auto' ? 'solo' as const : config.edition, path: config.authFile }
+    if (candidate === undefined) throw new Error('Trae storage was not found')
+    return readTraeIdentity(candidate)
+  }
+  const solo = new TraeSoloUpstreamClient({
+    credential: () => store.resolve(),
+    identity,
+    baseUrl: 'https://trae-api-cn.mchost.guru',
+  })
   const remote = new TraeSoloRemoteClient({ credential: () => store.resolve() })
-  const upstream = new TraeSoloRemoteBridge(remote)
+  const upstream = new TraeSoloBridge(solo)
   // The shim always sees a stable client; the Raw gateway may replace the
   // delegate asynchronously, but it stays disabled until a probe succeeds.
   const delegating = new TraeDelegatingUpstreamClient(upstream)
@@ -141,12 +161,43 @@ export function apply(ctx: Context, config: Config): void {
       rawDiagnostic = () => gateway.diagnostic()
       ctx.effect(() => () => gateway.invalidate(), 'dsh-connect-trae: Raw capability invalidation')
     } catch (error: unknown) {
-      ctx.logger.warn('dsh-connect-trae: Raw gateway unavailable; continuing with SOLO Remote', error)
+      ctx.logger.warn('dsh-connect-trae: Raw gateway unavailable; continuing with native SOLO tool-call channel', error)
     }
   })()
 
   // Read-only usage/credit summary served to the browser half. Optional on the
   // `webServer` seam; absent in headless runs, the host provider still works.
+  // `llm_utils_chat` bills general credits only; an account with zero general
+  // credits (e.g. this CN account) fails every request with 4008 / empty
+  // response. Pick a default that has general credits so the connector works
+  // out of the box, while still honouring an explicit account selection.
+  const selectPreferredGeneralAccount = async (): Promise<void> => {
+    try {
+      const accounts = await store.accounts()
+      const scored: { id: string; general: number }[] = []
+      for (const account of accounts) {
+        try {
+          store.selectAccount(account.id)
+          const credential = await store.resolve()
+          const snapshot = await new TraeUsageClient({ credential: async () => credential }).snapshot()
+          const general = Math.round(snapshot.packs
+            .filter(pack => pack.availableEndpoint === 0)
+            .reduce((sum, pack) => sum + Math.max(0, (pack.creditsLimit ?? 0) - (pack.consumedCredits ?? 0)), 0) * 10_000) / 10_000
+          scored.push({ id: account.id, general })
+        } catch (error: unknown) {
+          // One account whose token/snapshot fails must not block choosing a
+          // usable default from the others.
+          ctx.logger.warn(`dsh-connect-trae: account ${account.id} unavailable for default selection`, error)
+        }
+      }
+      scored.sort((a, b) => b.general - a.general)
+      store.setPreferAccountIds(scored.filter(item => item.general > 0).map(item => item.id))
+      // Restore the user's explicit selection (if any) before first use.
+      store.setSource(config.authFile, config.edition ?? 'auto', config.accountId)
+    } catch (error: unknown) {
+      ctx.logger.warn('dsh-connect-trae: default account selection failed; continuing', error)
+    }
+  }
   const usageClient = new TraeUsageClient({ credential: () => store.resolve() })
   let current = () => config
   let invalidateAdapter = (): void => {}
@@ -170,7 +221,7 @@ export function apply(ctx: Context, config: Config): void {
     setSource(source) { current = source },
     onChange() {
       const next = current()
-      store.setSource(next.authFile, next.edition ?? 'auto')
+      store.setSource(next.authFile, next.edition ?? 'auto', next.accountId)
       catalog.set(configuredModels(next))
       invalidateAdapter()
     },
@@ -182,8 +233,9 @@ export function apply(ctx: Context, config: Config): void {
     void shim.close()
   })
 
-  void shim.ready.then(() => {
+  void shim.ready.then(async () => {
     if (stopped) return
+    await selectPreferredGeneralAccount()
     catalog.set(configuredModels(current()))
     const trae = createTraeAdapter({
       shim,

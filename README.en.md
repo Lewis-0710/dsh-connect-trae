@@ -2,21 +2,22 @@
 
 [English](README.en.md) | 中文
 
-A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle plugin that connects locally signed-in Trae models to the DSH model picker, and exposes a read-only usage/credits overview.
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle plugin that connects locally signed-in Trae CN models to the DSH model picker. Trae generates structured tool calls while DSH executes its own local tools, with a read-only Work/general credits and model-management panel.
 
 ## Preview
 
 <p align="center">
-  <img src="docs/assets/dsh-connect-trae-usage-card.png" alt="DSH Connect Trae plugin card showing the current Trae account and credit summary" width="900">
+  <img src="docs/assets/dsh-connect-trae-usage-card.png" alt="DSH Connect Trae plugin card showing account selection, Work and general credits, and model management" width="900">
 </p>
 
-<p align="center"><sub>Settings → Plugins → DSH Connect Trae: reads the currently signed-in Trae account and displays available, consumed, and total credits.</sub></p>
+<p align="center"><sub>Settings → Plugins → DSH Connect Trae: switch local Trae accounts, view Work/general credits, and manage the Trae models enabled in DSH.</sub></p>
 
 ## Features
 
 - **Trae model provider** — registers locally signed-in Trae models as the `trae` provider (e.g. `DeepSeek-V4-Flash`, `DeepSeek-V4-Pro`).
-- **New SOLO remote sessions** — creates a session and polls the final answer over `solo.trae.cn/api/remote/v1`.
-- **Read-only usage overview** — expand the card in Plugin configuration (Settings → Plugins → DSH Connect Trae) to see total available credits, per-pack sources (legacy, check-in, monthly bonus), daily check-in status, and reward activity rules. Read-only; does not consume Trae credits.
+- **DSH local tool loop** — gets pending structured `tool_calls` from Trae `llm_utils_chat`, lets DSH execute its own local tools, then returns tool results to the model.
+- **Trae CN account switching** — detects local Trae CN and TRAE SOLO CN sign-ins, refreshes the token list, and lets users select an account without storing tokens in DSH settings.
+- **Read-only credits and model management** — shows Work credits separately from the general credits usable by DSH, and manages which Trae models are enabled. Read-only queries do not consume credits.
 - **Secure loopback shim** — random port + in-process random secret; the real Trae token is never handed to pi-ai.
 
 ## How it works
@@ -24,11 +25,11 @@ A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bund
 ```text
 DSH PiAiAdapter
   -> secure loopback shim
-  -> TraeSoloRemoteBridge
-  -> TraeSoloRemoteClient
-  -> https://solo.trae.cn/api/remote/v1/chat_sessions
-  -> poll /chat_sessions/:id/messages
-  -> extract final answer -> OpenAI SSE -> DSH
+  -> TraeSoloBridge
+  -> https://trae-api-cn.mchost.guru/api/agent/v3/llm_utils_chat
+  -> Trae SSE / pending function_call
+  -> OpenAI SSE tool_calls
+  -> DSH executes local tools and returns their results
 ```
 
 Usage overview hits the read-only `https://api.trae.cn/trae/api/v2/pay/*` and `/trae/api/v2/ug/*` endpoints.

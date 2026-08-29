@@ -20,6 +20,34 @@ describe('Trae SOLO protocol', () => {
     expect(prepared.tools[0].function.parameters).toBe('{"type":"object"}')
   })
 
+  it('normalises the DSH developer role to system for the Trae upstream', () => {
+    const prepared = JSON.parse(prepareSoloBody(JSON.stringify({
+      model: 'glm-5.2',
+      messages: [
+        { role: 'developer', content: 'You are a coding agent.' },
+        { role: 'user', content: 'hi' },
+      ],
+    })))
+    expect(prepared.messages[0]).toMatchObject({ role: 'system', content: [{ type: 'text', text: 'You are a coding agent.' }] })
+  })
+
+  it('preserves tool results for the next agent-loop turn', () => {
+    const prepared = JSON.parse(prepareSoloBody(JSON.stringify({
+      model: 'glm-5.2',
+      messages: [
+        { role: 'assistant', content: '', tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'read', arguments: '{"file_path":"README.md"}' } }] },
+        { role: 'tool', tool_call_id: 'call-1', content: 'file contents' },
+      ],
+    })))
+    expect(prepared.messages[0].tool_calls[0].function_call.name).toBe('read')
+    expect(prepared.messages[1]).toMatchObject({ role: 'tool', tool_call_id: 'call-1', content: [{ type: 'text', text: 'file contents' }] })
+  })
+
+  it('rejects tool results without a call id', () => {
+    expect(() => prepareSoloBody(JSON.stringify({ messages: [{ role: 'tool', content: 'orphan' }] })))
+      .toThrow('tool_call_id')
+  })
+
   it('parses model discovery including reasoning effort capabilities', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ config_info_list: [{
       config_name: 'glm-5.2', display_config: { display_name: 'GLM-5.2' },
