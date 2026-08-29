@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { cpus, release } from 'node:os'
+import { cpus, homedir, release } from 'node:os'
 import type { TraeEdition, TraeStorageCandidate } from './paths.ts'
 
 export interface TraeIdentity {
@@ -26,8 +26,20 @@ function deviceCenterId(storage: Record<string, unknown>): string | undefined {
   return ids.length === 1 ? ids[0] : undefined
 }
 
+export interface TraeIdentityReadOptions {
+  /** Platform override for testing; defaults to process.platform. */
+  platform?: NodeJS.Platform
+  /** Home-directory override for testing; defaults to homedir(). */
+  home?: string
+  /** Environment override for testing; defaults to process.env. */
+  env?: NodeJS.ProcessEnv
+}
+
 /** Read stable identity from Trae-owned files without generating impersonated IDs. */
-export async function readTraeIdentity(candidate: TraeStorageCandidate): Promise<TraeIdentity> {
+export async function readTraeIdentity(candidate: TraeStorageCandidate, options: TraeIdentityReadOptions = {}): Promise<TraeIdentity> {
+  const platform = options.platform ?? process.platform
+  const home = options.home ?? homedir()
+  const env = options.env ?? process.env
   const storage = JSON.parse(await readFile(candidate.path, 'utf8')) as Record<string, unknown>
   const appRoot = dirname(dirname(dirname(candidate.path)))
   const machineFile = nonEmpty(await readFile(join(appRoot, 'machineid'), 'utf8').catch(() => ''))
@@ -42,17 +54,33 @@ export async function readTraeIdentity(candidate: TraeStorageCandidate): Promise
   // x-device-id observed in official CN chat logs. Telemetry remains fallback.
   const deviceId = dcDevice ?? devDevice ?? createHash('sha256').update(machineId).digest('hex').slice(0, 32)
   const buildVersion = nonEmpty(storage['iCubeLastVersion'])
-  const productPaths = candidate.edition === 'cn' || candidate.edition === 'solo'
-    ? [candidate.edition === 'cn' ? '/Applications/Trae CN.app/Contents/Resources/app/product.json' : '/Applications/TRAE SOLO CN.app/Contents/Resources/app/product.json']
-    : []
+  // product.json holds the app version that the real client sends as
+  // x-app-version / x-ide-version. Only CN/SOLO installs are targeted, and the
+  // file lives under the app bundle on macOS but under LOCALAPPDATA\Programs on
+  // Windows. Failures here must not break identity resolution, so each path is
+  // tried in order and non-existent candidates are simply skipped.
+  const appName = candidate.edition === 'cn' ? 'Trae CN' : candidate.edition === 'solo' ? 'TRAE SOLO CN' : undefined
+  const productPaths: string[] = []
+  if (appName !== undefined && (platform === 'darwin' || platform === 'win32')) {
+    if (platform === 'darwin') {
+      productPaths.push(join('/Applications', `${appName}.app`, 'Contents', 'Resources', 'app', 'product.json'))
+    } else {
+      const localRoots = [env.LOCALAPPDATA, join(home, 'AppData', 'Local')]
+        .filter((value): value is string => typeof value === 'string' && value !== '')
+        .filter((value, index, all) => all.indexOf(value) === index)
+      for (const root of localRoots) {
+        productPaths.push(join(root, 'Programs', appName, 'resources', 'app', 'product.json'))
+      }
+    }
+  }
   let product: Record<string, unknown> = {}
   for (const path of productPaths) {
     try { product = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; break } catch {}
   }
   const appVersion = nonEmpty(product['appVersion'])
-  const deviceBrand = process.platform === 'darwin' ? nonEmpty(process.env['TRAE_DEVICE_BRAND']) : undefined
+  const deviceBrand = platform === 'darwin' ? nonEmpty(env['TRAE_DEVICE_BRAND']) : undefined
   const deviceCpu = cpus()[0]?.model.split(' ')[0]
-  const osVersion = `${process.platform === 'darwin' ? 'macOS' : process.platform} ${release()}`
+  const osVersion = `${platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : platform} ${release()}`
   return {
     edition: candidate.edition,
     machineId,
@@ -62,7 +90,7 @@ export async function readTraeIdentity(candidate: TraeStorageCandidate): Promise
     ...deviceBrand === undefined ? {} : { deviceBrand },
     ...deviceCpu === undefined ? {} : { deviceCpu },
     osVersion,
-    platform: process.platform,
+    platform,
   }
 }
 

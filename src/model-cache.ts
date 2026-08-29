@@ -45,9 +45,32 @@ export function parseTraeCachedModel(value: unknown): TraeCachedModelConfig | un
   }
 }
 
-/** Read Trae's own current user's model map via sqlite3 without exposing secrets. */
-export async function readTraeCachedModel(functionName: string, modelName: string, userId: string): Promise<TraeCachedModelConfig | undefined> {
-  const database = join(homedir(), 'Library', 'Application Support', 'Trae CN', 'User', 'globalStorage', 'state.vscdb')
+export interface TraeCachedModelReadOptions {
+  /** Platform override for testing; defaults to process.platform. */
+  platform?: NodeJS.Platform
+  /** Home-directory override for testing; defaults to homedir(). */
+  home?: string
+  /** Environment override for testing; defaults to process.env. */
+  env?: NodeJS.ProcessEnv
+}
+
+/**
+ * Read Trae's own current user's model map via sqlite3 without exposing
+ * secrets. The sqlite3 command line is a macOS prerequisite; on Windows it is
+ * typically absent, so the call fails and callers fall back gracefully.
+ */
+export async function readTraeCachedModel(
+  functionName: string,
+  modelName: string,
+  userId: string,
+  options: TraeCachedModelReadOptions = {},
+): Promise<TraeCachedModelConfig | undefined> {
+  const platform = options.platform ?? process.platform
+  const home = options.home ?? homedir()
+  const env = options.env ?? process.env
+  const database = platform === 'win32'
+    ? join(env.APPDATA ?? join(home, 'AppData', 'Roaming'), 'Trae CN', 'User', 'globalStorage', 'state.vscdb')
+    : join(home, 'Library', 'Application Support', 'Trae CN', 'User', 'globalStorage', 'state.vscdb')
   const key = `${userId}_AI.agent.model.model_list_map`
   const sql = `select value from ItemTable where key=${JSON.stringify(key)} limit 1;`
   const { stdout } = await execFileAsync('sqlite3', [database, sql], { maxBuffer: 8 * 1024 * 1024 })

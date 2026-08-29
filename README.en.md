@@ -63,6 +63,13 @@ npm install dsh-connect-trae
 
 Restart the DSH process after install/update/uninstall.
 
+## Windows notes
+
+- **Account data directory**: the plugin reads `%APPDATA%\Trae CN` / `%APPDATA%\TRAE SOLO CN` → `User\globalStorage\storage.json` (unrelated to the install directory). The folder names match macOS, so no extra config is needed; if the name does not match, point the `authFile` + `edition` plugin options at the exact path.
+- **App version headers**: the plugin reads `appVersion` from `<LOCALAPPDATA>\Programs\<AppName>\resources\app\product.json` and sends `x-app-version` / `x-ide-version`; if unreadable, those headers are omitted (same as the previous behavior).
+- **Raw Chat probing (known limitation)**: `model-cache` depends on the `sqlite3` command-line tool, which is not installed by default on Windows; Raw Chat capability probing fails and falls back safely. Raw Chat is off by default and does not affect the main flow.
+- See `docs/WINDOWS_TOKEN_PROBE.md` for troubleshooting.
+
 ## Development
 
 ```sh

@@ -65,6 +65,13 @@ npm install dsh-connect-trae
 
 安装、更新或卸载 bundle 后，需要重启对应的 DSH 进程。
 
+## Windows 说明
+
+- **账号数据目录**：插件读取 `%APPDATA%\Trae CN` / `%APPDATA%\TRAE SOLO CN` 下的 `User\globalStorage\storage.json`（与安装目录无关）。目录名与 macOS 一致，无需额外配置；若目录名对不上，可用插件配置项 `authFile` + `edition` 直接指定完整路径。
+- **应用版本头**：插件从安装目录 `<LOCALAPPDATA>\Programs\<AppName>\resources\app\product.json` 读取 `appVersion`，随请求发送 `x-app-version` / `x-ide-version`；读不到时这些头不发送（与旧版行为一致）。
+- **Raw Chat 探测（已知限制）**：`model-cache` 依赖 `sqlite3` 命令行，Windows 默认未安装，Raw Chat 能力探测会失败并安全回退。Raw Chat 默认关闭，不影响主流程。
+- 排查指引见 `docs/WINDOWS_TOKEN_PROBE.md`。
+
 ## 开发
 
 ```sh

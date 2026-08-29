@@ -43,7 +43,10 @@ describe('TraeCredentialStore', () => {
     } })
     const [a, b] = await Promise.all([store.resolve(), store.resolve()])
     expect(a.accessToken).toBe('fresh'); expect(b.accessToken).toBe('fresh'); expect(refreshes).toBe(1)
-    expect((await stat(own)).mode & 0o777).toBe(0o600)
+    // File permission bits are POSIX-only; Windows exposes no meaningful mode.
+    if (process.platform !== 'win32') {
+      expect((await stat(own)).mode & 0o777).toBe(0o600)
+    }
     expect(JSON.parse(await readFile(own, 'utf8')).credential.accessToken).toBe('fresh')
   })
 
