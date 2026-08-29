@@ -60,7 +60,7 @@ export { TRAE_USAGE_PATH, type TraeWebActivity, type TraeWebCheckin, type TraeWe
 export { createTraeShim, type TraeShim } from './shim.ts'
 export { UnconfiguredTraeUpstreamClient, type TraeChatResult, type TraeUpstreamClient } from './upstream.ts'
 
-export const name = 'llm-trae'
+export const name = 'dsh-connect-trae'
 export const inject = ['llm']
 export const TRAE_SETTINGS_NS = settingsNamespace('trae')
 

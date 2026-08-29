@@ -71,7 +71,7 @@ npm whoami
 4. **首次注册只做一次**：`dsh plugin --profile desktop add /路径` 以 `link:` 安装，重复注册会重装依赖树 → 不要重复执行。
 5. **更新后必须重启 DSH 进程**：bundle patch 与 host/client 半边在启动时加载 → 改代码 / 装新版本后重启 DSH Desktop（⌘Q → 重开）才生效；仅改 settings.yaml 是热加载，无需重启。
 6. **本地开发用 `link:`，不重装依赖树**：`dsh plugin --profile desktop add /Users/dmh2002/DshProject/dsh-connect-trae`，node_modules 里是源码软链，改码后重启生效；不要在 desktop profile 里手动跑 `pnpm install` 重装整树。
-7. **cordis.patch.yml 只做最小插入**：注册插件 id 即可，如本项目 `- insert: - id: llm-trae / name: dsh-connect-trae`，不改 profile 默认模型。
+7. **cordis.patch.yml 只做最小插入**：注册插件 id 即可，如本项目 `- insert: - id: dsh-connect-trae / name: dsh-connect-trae`，不改 profile 默认模型。
 8. **license / copyright 字段**：`package.json` 的 `license: "MIT"`、`copyright: "Copyright (c) 2026 LaoDing"` 与根 LICENSE 三者保持一致；README「许可证」章节应写全（协议 + 版权归属 + 概要 + 指向 LICENSE），不要只留一行 `[MIT](LICENSE)`。
 
 ## 4. 发布后验证（DSH 侧）
