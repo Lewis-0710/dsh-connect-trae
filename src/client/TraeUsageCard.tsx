@@ -402,31 +402,29 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                       </div>
                       <p className="dsm-trae-model-capability-note">{t('row.modelCapabilityPending')}</p>
                       <div className="dsm-trae-model-actions">
-                        <button type="button" className="dsm-btn dsm-btn-outline" disabled={!dirty || saving} onClick={discardModels}>
-                          {t('row.discard')}
-                        </button>
-                        <button type="button" className="dsm-btn dsm-btn-primary" disabled={!dirty || saving || activeEnabledIds.size === 0} onClick={() => { void saveModels() }}>
-                          {saving ? t('row.saving') : t('row.save')}
-                        </button>
+                        <a
+                          className="dsm-trae-usage-cheer"
+                          href={TRAE_GITHUB_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {t('row.cheer')}
+                          <span className="dsm-trae-usage-cheer-star" aria-hidden="true">★</span>
+                        </a>
+                        <div className="dsm-trae-model-actions-buttons">
+                          <button type="button" className="dsm-btn dsm-btn-outline" disabled={!dirty || saving} onClick={discardModels}>
+                            {t('row.discard')}
+                          </button>
+                          <button type="button" className="dsm-btn dsm-btn-primary" disabled={!dirty || saving || activeEnabledIds.size === 0} onClick={() => { void saveModels() }}>
+                            {saving ? t('row.saving') : t('row.save')}
+                          </button>
+                        </div>
                       </div>
                     </section>
                   </>
                 : null}
               {status.status === 'signed-out' ? <p className="dsm-trae-usage-text">{status.message ?? t('row.signedOutHint')}</p> : null}
               {status.status === 'error' ? <p className="dsm-trae-usage-error">{status.message}</p> : null}
-              <div className="dsm-trae-usage-footer">
-                <div className="dsm-trae-usage-footer-left">
-                  <a
-                    className="dsm-trae-usage-cheer"
-                    href={TRAE_GITHUB_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {t('row.cheer')}
-                    <span className="dsm-trae-usage-cheer-star" aria-hidden="true">★</span>
-                  </a>
-                </div>
-              </div>
             </div>
           : null}
       </div>

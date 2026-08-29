@@ -76,9 +76,8 @@ export const TRAE_CARD_CSS = `
 .dsm-trae-model-toggle{display:inline-flex;align-items:center;gap:5px;color:var(--dsw-alias-label-secondary,#b8b8b8);cursor:pointer;font-size:13px;line-height:19px;font-weight:500}
 .dsm-trae-model-toggle input{margin:0;accent-color:var(--dsw-alias-brand-primary,#5686fe)}
 .dsm-trae-model-capability-note{margin:0;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px}
-.dsm-trae-model-actions{display:flex;justify-content:flex-end;gap:8px;border-top:1px solid var(--dsw-alias-border-l2,#36373b);padding-top:12px}
-.dsm-trae-usage-footer{display:flex;align-items:center;border-top:1px solid var(--dsw-alias-border-l2,#36373b);padding-top:12px}
-.dsm-trae-usage-footer-left{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.dsm-trae-model-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;border-top:1px solid var(--dsw-alias-border-l2,#36373b);padding-top:12px}
+.dsm-trae-model-actions-buttons{display:flex;align-items:center;justify-content:flex-end;gap:8px}
 .dsm-trae-usage-cheer{display:inline-flex;align-items:center;gap:4px;flex:none;text-decoration:underline;text-underline-offset:2px;color:var(--dsw-alias-label-tertiary,#999);font-size:13px;line-height:1.5;transition:color .16s}
 .dsm-trae-usage-cheer-star{font-size:12px;line-height:1;display:inline-flex}
 .dsm-trae-usage-cheer:hover{color:var(--dsw-alias-label-primary,#e6e6e6)}
