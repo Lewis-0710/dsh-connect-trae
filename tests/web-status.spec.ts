@@ -81,6 +81,14 @@ describe('traeWebUsage', () => {
     expect(call).toBe(1)
   })
 
+  it('keeps discovered candidates separate from the saved runtime list', async () => {
+    const deps = makeRoute()
+    deps.discoverModels = async () => [{ id: 'new-model', name: 'New Model', contextWindow: 200_000 }]
+    const before = deps.models()
+    await expect(deps.discoverModels()).resolves.toEqual([{ id: 'new-model', name: 'New Model', contextWindow: 200_000 }])
+    expect(deps.models()).toEqual(before)
+  })
+
   it('degrades a failing credit fetch to creditsError', async () => {
     const fetchImpl = async () => { throw new Error('network down') }
     const deps = makeRoute({ fetchImpl })

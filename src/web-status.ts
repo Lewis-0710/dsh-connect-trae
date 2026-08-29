@@ -26,7 +26,7 @@ export interface TraeUsageRouteOptions {
   store: TraeCredentialStore
   client: TraeUsageClient
   models(): readonly TraeModelInfo[]
-  refreshModels?(signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
+  discoverModels?(signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
 }
 
 /** Redact token-like content before it crosses to the browser. */
@@ -118,9 +118,9 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
       handler: async (req: IncomingMessage, res: ServerResponse) => {
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
-        if (deps.refreshModels === undefined) return json(res, 503, { error: 'model refresh unavailable' })
+        if (deps.discoverModels === undefined) return json(res, 503, { error: 'model refresh unavailable' })
         try {
-          const models = await deps.refreshModels()
+          const models = await deps.discoverModels()
           json(res, 200, { models })
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })

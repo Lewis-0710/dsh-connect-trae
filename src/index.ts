@@ -79,19 +79,17 @@ export function apply(ctx: Context, config: Config): void {
   const usageClient = new TraeUsageClient({ credential: () => store.resolve() })
   let current = () => config
   let invalidateAdapter = (): void => {}
-  const refreshModels = async (signal?: AbortSignal): Promise<readonly TraeModelInfo[]> => {
+  const discoverModels = async (signal?: AbortSignal): Promise<readonly TraeModelInfo[]> => {
     const discovered = await remote.fetchModels(signal)
-    const enabled1m = new Set(current().enabled1mModels ?? [])
-    const next = discoveredCatalog(discovered, enabled1m)
-    catalog.set(next)
-    invalidateAdapter()
-    return next
+    // Discovery is a draft operation: do not mutate the runtime catalog until
+    // the user explicitly saves the selected snapshot and 1M switches.
+    return discoveredCatalog(discovered, new Set())
   }
   ctx.inject(['webServer'], (webCtx) => registerTraeUsageRoute(webCtx, {
     store,
     client: usageClient,
     models: () => catalog.current(),
-    refreshModels,
+    discoverModels,
   }))
 
   installSettingsSection(ctx, TRAE_SETTINGS_NS, Config, config, {
@@ -100,6 +98,7 @@ export function apply(ctx: Context, config: Config): void {
       const next = current()
       store.setSource(next.authFile, next.edition ?? 'auto')
       catalog.set(configuredModels(next))
+      invalidateAdapter()
     },
   })
 
@@ -124,7 +123,7 @@ export function apply(ctx: Context, config: Config): void {
       releaseAdapter = ctx.llm.registerAdapter([TRAE_PROVIDER], trae.adapter)
       ctx.llm.registerModelDiscovery(TRAE_SETTINGS_NS, async (request) => {
         if (request.provider !== TRAE_PROVIDER) return []
-        const next = await refreshModels(request.signal)
+        const next = await discoverModels(request.signal)
         return next.map(model => ({
           id: model.id,
           name: model.name,

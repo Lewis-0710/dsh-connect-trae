@@ -11,7 +11,7 @@ import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from '../status-paths.ts'
-import type { TraeWebUsage } from '../status-paths.ts'
+import type { TraeWebModel, TraeWebUsage } from '../status-paths.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
 import type { TraeSettingsKey } from './locales.ts'
@@ -81,6 +81,10 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   const [status, setStatus] = useState<TraeWebUsage>({ status: 'signed-out' })
   const [busy, setBusy] = useState(false)
   const [settingsRevision, setSettingsRevision] = useState(0)
+  const [draftModels, setDraftModels] = useState<TraeWebModel[] | undefined>(undefined)
+  const [draftEnabledIds, setDraftEnabledIds] = useState<Set<string> | undefined>(undefined)
+  const [draft1mIds, setDraft1mIds] = useState<Set<string> | undefined>(undefined)
+  const [saving, setSaving] = useState(false)
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -141,8 +145,12 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
         headers: { accept: 'application/json' },
         credentials: 'same-origin',
       })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      await refresh()
+      const body = await response.json() as { models?: TraeWebModel[] }
+      if (!response.ok || !Array.isArray(body.models)) throw new Error(`HTTP ${response.status}`)
+      const savedIds = status.status === 'signed-in' ? new Set(status.models.filter(model => model.maxContext !== true).map(model => model.id)) : new Set<string>()
+      setDraftModels(body.models.filter(model => model.maxContext !== true))
+      setDraftEnabledIds(new Set(body.models.filter(model => savedIds.has(model.id)).map(model => model.id)))
+      setDraft1mIds(new Set(enabled1mModels))
     } catch (error: unknown) {
       if (mounted.current) setStatus({ status: 'error', message: error instanceof Error ? error.message : t('row.requestFailed') })
     } finally {
@@ -157,12 +165,49 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
       : [],
   )
   void settingsRevision
-  const toggle1m = async (modelId: string): Promise<void> => {
-    if (settingsScope === undefined) return
-    const next = new Set(enabled1mModels)
+  const visibleModels = draftModels ?? (status.status === 'signed-in' ? status.models.filter(model => model.maxContext !== true) : [])
+  const savedEnabledIds = status.status === 'signed-in' ? new Set(status.models.filter(model => model.maxContext !== true).map(model => model.id)) : new Set<string>()
+  const activeEnabledIds = draftEnabledIds ?? savedEnabledIds
+  const active1mIds = draft1mIds ?? enabled1mModels
+  const dirty = draftModels !== undefined || draftEnabledIds !== undefined || draft1mIds !== undefined
+
+  const toggleModel = (modelId: string): void => {
+    const next = new Set(activeEnabledIds)
     if (!next.delete(modelId)) next.add(modelId)
-    await settingsScope.set('enabled1mModels', [...next])
-    await refreshModels()
+    setDraftEnabledIds(next)
+    setDraftModels(visibleModels)
+  }
+
+  const toggle1m = (modelId: string): void => {
+    const next = new Set(active1mIds)
+    if (!next.delete(modelId)) next.add(modelId)
+    setDraft1mIds(next)
+    setDraftModels(visibleModels)
+  }
+
+  const discardModels = (): void => {
+    setDraftModels(undefined)
+    setDraftEnabledIds(undefined)
+    setDraft1mIds(undefined)
+  }
+
+  const saveModels = async (): Promise<void> => {
+    if (settingsScope === undefined) return
+    setSaving(true)
+    try {
+      const selected = visibleModels.filter(model => activeEnabledIds.has(model.id)).map(model => ({
+        ...model,
+        maxContext: undefined,
+        maxContextEnabled: undefined,
+        maxContextWindow: undefined,
+      }))
+      await settingsScope.set('models', selected)
+      await settingsScope.set('enabled1mModels', [...active1mIds].filter(id => activeEnabledIds.has(id)))
+      discardModels()
+      await refresh()
+    } finally {
+      if (mounted.current) setSaving(false)
+    }
   }
 
   const title = t('row.title')
@@ -243,7 +288,7 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                       <div className="dsm-trae-models-head">
                         <div>
                           <h3 className="dsm-trae-models-title">{t('row.modelsTitle')}</h3>
-                          <p className="dsm-trae-models-summary">{t('row.modelsSummary', { count: status.models.length })}</p>
+                          <p className="dsm-trae-models-summary">{t('row.modelsSummary', { count: activeEnabledIds.size })}</p>
                         </div>
                         <button
                           type="button"
@@ -255,19 +300,27 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                         </button>
                       </div>
                       <div className="dsm-trae-model-list">
-                        {status.models.map(model => (
-                          <div className="dsm-trae-model" key={model.id}>
+                        {visibleModels.map(model => (
+                          <div className={`dsm-trae-model${activeEnabledIds.has(model.id) ? '' : ' dsm-trae-model-disabled'}`} key={model.id}>
                             <div className="dsm-trae-model-head">
-                              <div className="dsm-trae-model-copy">
-                                <span className="dsm-trae-model-name">{model.name}</span>
-                                <span className="dsm-trae-model-id">{model.id}</span>
-                              </div>
+                              <label className="dsm-trae-model-enabled">
+                                <input
+                                  type="checkbox"
+                                  checked={activeEnabledIds.has(model.id)}
+                                  disabled={settingsScope?.getSnapshot().writable !== true || saving}
+                                  onChange={() => { toggleModel(model.id) }}
+                                />
+                                <span className="dsm-trae-model-copy">
+                                  <span className="dsm-trae-model-name">{model.name}</span>
+                                  <span className="dsm-trae-model-id">{model.id}</span>
+                                </span>
+                              </label>
                               {model.maxContextWindow === undefined || model.maxContext === true ? null
                                 : <label className="dsm-trae-model-toggle">
                                     <input
                                       type="checkbox"
-                                      checked={enabled1mModels.has(model.id)}
-                                      disabled={settingsScope === undefined || settingsScope.getSnapshot().writable !== true || busy}
+                                      checked={active1mIds.has(model.id)}
+                                      disabled={!activeEnabledIds.has(model.id) || settingsScope?.getSnapshot().writable !== true || busy || saving}
                                       onChange={() => { void toggle1m(model.id) }}
                                     />
                                     <span>{t('row.modelEnable1m')}</span>
@@ -287,6 +340,14 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                         ))}
                       </div>
                       <p className="dsm-trae-model-capability-note">{t('row.modelCapabilityPending')}</p>
+                      <div className="dsm-trae-model-actions">
+                        <button type="button" className="dsm-btn dsm-btn-outline" disabled={!dirty || saving} onClick={discardModels}>
+                          {t('row.discard')}
+                        </button>
+                        <button type="button" className="dsm-btn dsm-btn-primary" disabled={!dirty || saving || activeEnabledIds.size === 0} onClick={() => { void saveModels() }}>
+                          {saving ? t('row.saving') : t('row.save')}
+                        </button>
+                      </div>
                     </section>
                   </>
                 : null}
