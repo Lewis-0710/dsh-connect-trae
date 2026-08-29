@@ -7,6 +7,7 @@
 import {
   buildTraeCnHeaders,
   buildTraeRawChatDraft,
+  buildTraeFusionRawChatEnvelope,
   readTraeIdentity,
   refreshTraeCredential,
   TraeCredentialStore,
@@ -26,12 +27,17 @@ const credential = await store.resolve()
 const identity = await readTraeIdentity(candidate)
 const requestId = crypto.randomUUID()
 const headers = buildTraeCnHeaders(credential, identity, { requestId, profile: 'raw-chat' })
-const body = buildTraeRawChatDraft({
-  model: 'glm-5.2',
+const envelopeMode = process.argv.includes('--fusion-envelope')
+const model = process.argv.find(arg => arg.startsWith('--model='))?.slice('--model='.length) ?? 'qwen-3.7-plus'
+const core = buildTraeRawChatDraft({
+  model,
   messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
   maxTokens: 8,
   temperature: 0,
 })
+const body = envelopeMode
+  ? buildTraeFusionRawChatEnvelope(core, { config_name: model, model_name: model, pass_back_reasoning: true })
+  : core
 const target = traeEndpoint('https://trae-api-cn.mchost.guru', TRAE_RAW_CHAT_V2_PATH)
 const summary = {
   mode: live ? 'live' : 'dry-run',
@@ -39,10 +45,11 @@ const summary = {
   endpoint: target,
   method: 'POST',
   headerNames: Object.keys(headers).sort(),
+  envelopeMode,
   bodyKeys: Object.keys(body).sort(),
-  messageRoles: body.messages.map(message => message.role),
-  messageCount: body.messages.length,
-  promptCharacters: typeof body.messages[0]?.content === 'string' ? body.messages[0].content.length : 0,
+  messageRoles: core.messages.map(message => message.role),
+  messageCount: core.messages.length,
+  promptCharacters: typeof core.messages[0]?.content === 'string' ? core.messages[0].content.length : 0,
   machineIdLength: identity.machineId.length,
   deviceIdLength: identity.deviceId.length,
   fallbackEndpoints: [],

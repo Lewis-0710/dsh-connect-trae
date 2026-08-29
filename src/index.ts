@@ -24,6 +24,7 @@ export { parseTraeRemoteModel, type TraeDiscoveredModel, type TraeDiscoveredReas
 export { traeStorageCandidates, type TraeEdition, type TraeStorageCandidate } from './paths.ts'
 export { buildTraeAgentTaskBody, buildTraeCnHeaders, TRAE_CN_AGENT_TASK_PATH, TRAE_CN_TITLE_PATH, traeEndpoint } from './protocol.ts'
 export { buildTraeRawChatDraft, decodeRawChatChunk, TRAE_RAW_CHAT_V1_PATH, TRAE_RAW_CHAT_V2_PATH, type RawChatDelta, type RawChatMessage, type RawChatTool } from './raw-chat.ts'
+export { buildTraeFusionRawChatEnvelope, hashTraeRawChatArg, type TraeFusionRawChatEnvelope } from './raw-envelope.ts'
 export { TraeRawChatUpstreamClient, type TraeRawChatClientOptions, type TraeRawChatConfig } from './raw-upstream.ts'
 export { TraeFallbackUpstreamClient, type TraeFallbackUpstreamOptions } from './fallback-upstream.ts'
 export { applyReasoningEffort, parseReasoningCapability, TRAE_REASONING_EFFORTS, type TraeReasoningCapability, type TraeReasoningEffort } from './reasoning.ts'
