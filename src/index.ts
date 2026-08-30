@@ -7,7 +7,7 @@ import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
 import { TraeCredentialStore } from './auth.ts'
 import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential } from './refresh.ts'
-import { readTraeIdentity } from './identity.ts'
+import { pickTraeStorageIdentity, readTraeIdentity } from './identity.ts'
 import { traeStorageCandidates } from './paths.ts'
 import { createTraeShim } from './shim.ts'
 import { TraeSoloUpstreamClient } from './solo.ts'
@@ -25,7 +25,7 @@ export { createTraeAdapter, TRAE_PROVIDER, TRAE_STREAM_IDLE_TIMEOUT_MS } from '.
 export { normalizeTraeCredential, traeOwnAuthPath, TraeCredentialStore, type TraeCredential } from './auth.ts'
 export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
 export { decryptTraeStorageValue, parseTraeAuthValue, parseTraeStorageDocument } from './decrypt.ts'
-export { identityHeaders, readTraeIdentity, type TraeIdentity } from './identity.ts'
+export { identityHeaders, pickTraeStorageIdentity, readTraeIdentity, type TraeIdentity } from './identity.ts'
 export { parseObservedModelConfig, type TraeObservedModelConfig } from './model-config.ts'
 export { parseTraeCachedModel, readTraeCachedModel, type TraeCachedModelConfig } from './model-cache.ts'
 export { parseTraeModelExtraConfigLogLine, parseTraeRawChatBehaviorConfig, type TraeRawChatBehaviorConfig } from './model-extra-config.ts'
@@ -146,11 +146,15 @@ export function apply(ctx: Context, config: Config): void {
     refresh: credential => refreshTraeCredential(credential),
   })
   const identity = async () => {
-    const candidate = config.authFile === undefined
-      ? traeStorageCandidates().find(item => (item.edition === 'cn' || item.edition === 'solo') && (config.edition === undefined || config.edition === 'auto' || item.edition === config.edition))
-      : { edition: config.edition === undefined || config.edition === 'auto' ? 'solo' as const : config.edition, path: config.authFile }
-    if (candidate === undefined) throw new Error('Trae storage was not found')
-    return readTraeIdentity(candidate)
+    // Pick the first CN/SOLO candidate whose storage file actually exists,
+    // mirroring the credential store's skip-missing semantics. Windows machines
+    // often install only SOLO, so pinning the first (cn) candidate and reading a
+    // missing file used to throw ENOENT and break every refresh/chat request.
+    const candidates = config.authFile === undefined
+      ? traeStorageCandidates().filter(item => (item.edition === 'cn' || item.edition === 'solo') && (config.edition === undefined || config.edition === 'auto' || item.edition === config.edition))
+      : [{ edition: config.edition === undefined || config.edition === 'auto' ? 'solo' as const : config.edition, path: config.authFile }]
+    if (candidates.length === 0) throw new Error('Trae storage was not found')
+    return pickTraeStorageIdentity(candidates)
   }
   const solo = new TraeSoloUpstreamClient({
     credential: () => store.resolve(),

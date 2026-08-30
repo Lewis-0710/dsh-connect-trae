@@ -94,6 +94,38 @@ export async function readTraeIdentity(candidate: TraeStorageCandidate, options:
   }
 }
 
+/** Detect a missing storage file (as opposed to a parse/identity error). */
+function isFileMissing(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT'
+}
+
+/**
+ * Try candidates in order and return the first that yields a valid identity;
+ * fail hard only when none do. Mirrors the credential store's skip-missing
+ * semantics so a machine with only SOLO (no CN install) resolves correctly
+ * instead of pinning the first candidate and throwing on a missing file.
+ * When every candidate is absent from disk the error names all tried paths;
+ * a candidate that exists but fails to parse still surfaces its own error.
+ */
+export async function pickTraeStorageIdentity(
+  candidates: readonly TraeStorageCandidate[],
+  options: TraeIdentityReadOptions = {},
+): Promise<TraeIdentity> {
+  let lastError: unknown
+  let anyPresent = false
+  for (const candidate of candidates) {
+    try {
+      return await readTraeIdentity(candidate, options)
+    } catch (error) {
+      lastError = error
+      if (!isFileMissing(error)) anyPresent = true
+    }
+  }
+  const tried = candidates.map(item => item.path).join(' or ')
+  if (!anyPresent) throw new Error(`Trae storage was not found (${tried})`)
+  throw lastError instanceof Error ? lastError : new Error(`Trae identity could not be resolved (${tried})`)
+}
+
 /** Headers derived from actual persisted identity, never a new random identity per request. */
 export function identityHeaders(identity: TraeIdentity): Record<string, string> {
   return {

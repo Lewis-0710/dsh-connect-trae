@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { identityHeaders, readTraeIdentity } from '../src/identity.ts'
+import { identityHeaders, pickTraeStorageIdentity, readTraeIdentity } from '../src/identity.ts'
 
 const cleanup: string[] = []
 afterEach(async () => { await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
@@ -83,5 +83,37 @@ describe('Trae persisted identity', () => {
       expect(value.appVersion).toBeUndefined()
       expect(value.platform).toBe('win32')
     }
+  })
+
+  it('picks the first present candidate, skipping missing editions (Windows SOLO-only machine)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'trae-pick-')); cleanup.push(root)
+    // The cn install is absent on this machine; only the SOLO storage exists.
+    const cnStorage = join(root, 'Trae CN', 'User', 'globalStorage', 'storage.json')
+    const soloStorage = join(root, 'TRAE SOLO CN', 'User', 'globalStorage', 'storage.json')
+    await mkdir(join(root, 'TRAE SOLO CN', 'User', 'globalStorage'), { recursive: true })
+    await writeFile(soloStorage, JSON.stringify({ 'telemetry.devDeviceId': 'device-stable', 'telemetry.machineId': 'telemetry-machine' }))
+    const value = await pickTraeStorageIdentity(
+      [
+        { edition: 'cn', path: cnStorage },
+        { edition: 'solo', path: soloStorage },
+      ],
+      { platform: 'win32', home: root, env: {} },
+    )
+    expect(value.edition).toBe('solo')
+    expect(value.machineId).toBe('telemetry-machine')
+    expect(value.platform).toBe('win32')
+  })
+
+  it('throws a friendly error when every candidate storage is missing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'trae-pick-')); cleanup.push(root)
+    const cnStorage = join(root, 'Trae CN', 'User', 'globalStorage', 'storage.json')
+    const soloStorage = join(root, 'TRAE SOLO CN', 'User', 'globalStorage', 'storage.json')
+    await expect(pickTraeStorageIdentity(
+      [
+        { edition: 'cn', path: cnStorage },
+        { edition: 'solo', path: soloStorage },
+      ],
+      { platform: 'win32', home: root, env: {} },
+    )).rejects.toThrow(/Trae storage was not found/)
   })
 })
