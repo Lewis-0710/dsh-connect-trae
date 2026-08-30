@@ -41,10 +41,7 @@ export interface TraeWebModel {
     supported: string[]
     defaultEffort?: string
   }
-  baseModelId?: string
-  maxContext?: boolean
   maxContextWindow?: number
-  maxContextEnabled?: boolean
 }
 
 /** Daily check-in status rendered by the card. */
@@ -81,7 +78,6 @@ export type TraeWebUsage =
     accounts: readonly TraeWebAccount[]
     models: readonly TraeWebModel[]
     enabledModelIds: readonly string[]
-    enabled1mModelIds: readonly string[]
     rawChat?: {
       state: 'disabled' | 'unchecked' | 'available' | 'protocol-gated' | 'authentication' | 'credit' | 'rate' | 'transport' | 'server'
       checkedAtMs?: number

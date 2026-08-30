@@ -17,13 +17,26 @@ function classify(status: number): TraeUpstreamErrorKind {
   return 'client'
 }
 
+function finitePositive(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
+}
+
 export function prepareSoloBody(source: string, defaultModel = 'glm-5.2'): string {
-  const body = JSON.parse(source) as Record<string, unknown>
-  const model = typeof body['model'] === 'string' && body['model'].trim() !== '' ? body['model'].trim() : defaultModel
-  body['model'] = model
-  body['config_name'] = model
-  body['function'] = TRAE_SOLO_FUNCTION
-  body['stream'] = true
+  const input = JSON.parse(source) as Record<string, unknown>
+  const requestedModel = typeof input['model'] === 'string' && input['model'].trim() !== '' ? input['model'].trim() : defaultModel
+  const model = requestedModel
+  // llm_utils_chat is not an OpenAI-compatible endpoint. Build its evidenced
+  // envelope explicitly so optional Pi/OpenAI fields (temperature, max_tokens,
+  // tool_choice, response_format, etc.) cannot make every model fail validation.
+  const body: Record<string, unknown> = {
+    ...Array.isArray(input['messages']) ? { messages: input['messages'] } : {},
+    model,
+    config_name: model,
+    function: TRAE_SOLO_FUNCTION,
+    stream: true,
+    ...Array.isArray(input['tools']) ? { tools: input['tools'] } : {},
+    ...typeof input['reasoning_effort'] === 'string' ? { reasoning_effort: input['reasoning_effort'] } : {},
+  }
   if (Array.isArray(body['messages'])) {
     for (const raw of body['messages']) {
       if (typeof raw !== 'object' || raw === null) continue
@@ -76,6 +89,7 @@ export interface TraeSoloClientOptions {
   identity(): Promise<TraeIdentity>
   baseUrl?: string
   fetchImpl?: typeof fetch
+  log?: (message: string, detail?: unknown) => void
 }
 
 export class TraeSoloUpstreamClient {
@@ -110,8 +124,18 @@ export class TraeSoloUpstreamClient {
       const display = typeof config['display_config'] === 'object' && config['display_config'] !== null ? config['display_config'] as Record<string, unknown> : {}
       const details = Array.isArray(config['model_detail_list']) ? config['model_detail_list'] : []
       const detail = typeof details[0] === 'object' && details[0] !== null ? details[0] as Record<string, unknown> : {}
-      const contextWindow = typeof detail['max_input_tokens'] === 'number' ? detail['max_input_tokens'] : typeof config['max_input_tokens'] === 'number' ? config['max_input_tokens'] : undefined
-      const maxTokens = typeof detail['max_output_tokens'] === 'number' ? detail['max_output_tokens'] : typeof config['max_output_tokens'] === 'number' ? config['max_output_tokens'] : undefined
+      // get_detail_param's real field names (verified 2026-08-30): the context
+      // window is `model_detail_list[].prompt_max_tokens` (or the top-level
+      // `context_window_tokens.dev`), and max output is `model_detail_list[].max_tokens`.
+      // There are no `max_input_tokens` / `max_output_tokens` fields; reading them
+      // made every row's windows nil. The wire `config_name` (what `llm_utils_chat`
+      // accepts) is `config_name` itself — NOT `model_name` (a `__dev`/`__max`
+      // variant that only names the underlying checkpoint).
+      const contextTokens = typeof config['context_window_tokens'] === 'object' && config['context_window_tokens'] !== null ? config['context_window_tokens'] as Record<string, unknown> : {}
+      const promptMaxTokens = finitePositive(detail['prompt_max_tokens'])
+      const devTokens = finitePositive(contextTokens['dev'])
+      const contextWindow = promptMaxTokens ?? devTokens
+      const maxTokens = finitePositive(detail['max_tokens'])
       const reasoning = parseReasoningCapability({ ...config, ...detail })
       models.push({
         id,
@@ -141,6 +165,13 @@ export class TraeSoloUpstreamClient {
     }
     if (response.ok) return { ok: true, response }
     const text = (await response.text()).slice(0, 1024)
+    this.options.log?.('dsh-connect-trae: llm_utils_chat rejected', {
+      status: response.status,
+      model: JSON.parse(prepared)['model'],
+      configName: JSON.parse(prepared)['config_name'],
+      reasoningEffort: JSON.parse(prepared)['reasoning_effort'],
+      body: text,
+    })
     return { ok: false, status: response.status, kind: classify(response.status), message: text || `Trae SOLO returned HTTP ${response.status}` }
   }
 }

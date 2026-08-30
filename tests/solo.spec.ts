@@ -20,6 +20,47 @@ describe('Trae SOLO protocol', () => {
     expect(prepared.tools[0].function.parameters).toBe('{"type":"object"}')
   })
 
+  it('drops undeclared OpenAI parameters from minimal and tool-rich requests', () => {
+    const prepared = JSON.parse(prepareSoloBody(JSON.stringify({
+      model: 'Doubao-Seed-Code',
+      messages: [{ role: 'developer', content: 'title' }, { role: 'user', content: 'name it' }],
+      temperature: 0.2,
+      max_tokens: 128,
+      tool_choice: 'auto',
+      parallel_tool_calls: true,
+      response_format: { type: 'json_object' },
+      user: 'session',
+    })))
+    expect(prepared).toEqual({
+      messages: [
+        { role: 'system', content: [{ type: 'text', text: 'title' }] },
+        { role: 'user', content: [{ type: 'text', text: 'name it' }] },
+      ],
+      model: 'Doubao-Seed-Code',
+      config_name: 'Doubao-Seed-Code',
+      function: 'solo_work_lite',
+      stream: true,
+    })
+  })
+
+  it('keeps image content arrays unchanged while filtering the envelope', () => {
+    const content = [
+      { type: 'text', text: 'describe' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } },
+    ]
+    const prepared = JSON.parse(prepareSoloBody(JSON.stringify({
+      model: 'Doubao-Seed-Code', messages: [{ role: 'user', content }], temperature: 1,
+    })))
+    expect(prepared.messages[0].content).toEqual(content)
+    expect(prepared).toMatchObject({ model: 'Doubao-Seed-Code', config_name: 'Doubao-Seed-Code' })
+    expect(prepared).not.toHaveProperty('temperature')
+  })
+
+  it('passes the requested model id through unchanged as the llm_utils_chat wire id', () => {
+    const prepared = JSON.parse(prepareSoloBody(JSON.stringify({ model: 'glm-5.2', messages: [] })))
+    expect(prepared).toMatchObject({ model: 'glm-5.2', config_name: 'glm-5.2' })
+  })
+
   it('normalises the DSH developer role to system for the Trae upstream', () => {
     const prepared = JSON.parse(prepareSoloBody(JSON.stringify({
       model: 'glm-5.2',
@@ -48,13 +89,18 @@ describe('Trae SOLO protocol', () => {
       .toThrow('tool_call_id')
   })
 
-  it('parses model discovery including reasoning effort capabilities', async () => {
+  it('parses model discovery from the real get_detail_param field names', async () => {
+    // Verified 2026-08-30: get_detail_param uses `model_detail_list[].prompt_max_tokens`
+    // (context) and `max_tokens` (max output). There are no `max_input_tokens` /
+    // `max_output_tokens` / `reasoning_effort_options` fields; reading those made
+    // every row's context/maxTokens/reasoning undefined.
     const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ config_info_list: [{
       config_name: 'glm-5.2', display_config: { display_name: 'GLM-5.2' },
-      model_detail_list: [{ model_name: 'glm-5.2', max_input_tokens: 168000, max_output_tokens: 32000, reasoning_effort_options: ['low', 'medium', 'high'], default_reasoning_effort: 'medium' }],
+      context_window_tokens: { dev: 232768 },
+      model_detail_list: [{ model_name: 'glm-5.2__dev', prompt_max_tokens: 168000, max_tokens: 32000 }],
     }] }), { status: 200, headers: { 'content-type': 'application/json' } }))
     const client = new TraeSoloUpstreamClient({ credential: async () => credential, identity: async () => identity, fetchImpl })
-    await expect(client.fetchModels()).resolves.toEqual([{ id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 168000, maxTokens: 32000, reasoning: { supported: ['low', 'medium', 'high'], defaultEffort: 'medium' } }])
+    await expect(client.fetchModels()).resolves.toEqual([{ id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 168000, maxTokens: 32000 }])
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://host/api/ide/v1/get_detail_param')
   })
 

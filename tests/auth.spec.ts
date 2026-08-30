@@ -89,7 +89,20 @@ describe('TraeCredentialStore', () => {
     expect((await store.accounts())[1]?.selected).toBe(true)
   })
 
-  it('prefers a general-credit account when none is explicitly selected', async () => {
+  it('defaults to the first discovered account, never credit-seeking, when none is selected', async () => {
+    const dir = await temp()
+    const cn = join(dir, 'cn.json'); const solo = join(dir, 'solo.json')
+    await writeFile(cn, storage('cn-token', Date.now() + 3_600_000, undefined, 'cn-user'))
+    await writeFile(solo, storage('solo-token', Date.now() + 3_600_000, undefined, 'solo-user'))
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [{ edition: 'cn', path: cn }, { edition: 'solo', path: solo }]
+    // No explicit selection: the FIRST account (cn-user) is used, regardless of
+    // which account might have credits. The plugin must not hunt for credits.
+    await expect(store.current()).resolves.toMatchObject({ userId: 'cn-user' })
+    expect((await store.accounts()).find(account => account.accountName === 'cn-user')?.selected).toBe(true)
+  })
+
+  it('does not fall back to another account when the selected account disappears', async () => {
     const dir = await temp()
     const cn = join(dir, 'cn.json'); const solo = join(dir, 'solo.json')
     await writeFile(cn, storage('cn-token', Date.now() + 3_600_000, undefined, 'cn-user'))
@@ -97,9 +110,12 @@ describe('TraeCredentialStore', () => {
     const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
     store.candidates = () => [{ edition: 'cn', path: cn }, { edition: 'solo', path: solo }]
     const soloId = (await store.accounts()).find(account => account.accountName === 'solo-user')!.id
-    store.setPreferAccountIds([soloId])
+    store.selectAccount(soloId)
     await expect(store.current()).resolves.toMatchObject({ userId: 'solo-user' })
-    expect((await store.accounts()).find(account => account.accountName === 'solo-user')?.selected).toBe(true)
+    // Remove the selected account's file: selection must NOT silently switch
+    // to the remaining account; it must surface as "not found".
+    await rm(solo)
+    await expect(store.current()).resolves.toBeUndefined()
   })
 
   it('auto mode includes CN editions only', () => {
@@ -117,12 +133,14 @@ describe('TraeCredentialStore', () => {
     await expect(store.accounts()).resolves.toMatchObject([{ accountName: 'good-user', edition: 'solo' }])
   })
 
-  it('falls back when the saved account no longer exists', async () => {
+  it('does not fall back when the saved account no longer exists', async () => {
     const dir = await temp(); const file = join(dir, 'current.json')
     await writeFile(file, storage('current-token', Date.now() + 3_600_000, undefined, 'current-user'))
     const store = new TraeCredentialStore({ storagePath: file, edition: 'solo', accountId: 'removed-account', ownPath: join(dir, 'own'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
-    await expect(store.resolve()).resolves.toMatchObject({ userId: 'current-user' })
-    expect(await store.accounts()).toMatchObject([{ accountName: 'current-user', selected: true }])
+    // The explicitly selected account id is gone. The plugin must NOT silently
+    // switch to another live account; it surfaces "no signed-in account" so the
+    // user can re-select instead of being billed against a different account.
+    await expect(store.resolve()).rejects.toThrow(/no signed-in account found/)
   })
 
   it('reports signed out for a missing explicit file', async () => {

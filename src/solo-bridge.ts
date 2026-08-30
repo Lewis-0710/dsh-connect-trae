@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { SseDecoder, decodeTraeEvent } from './sse.ts'
+import type { TraeCatalog } from './catalog.ts'
 import type { TraeChatResult, TraeUpstreamClient } from './upstream.ts'
 
 interface OpenAIToolCallDelta {
@@ -44,7 +45,8 @@ export function bridgeTraeSoloStream(response: Response, model: string): Respons
   const encoder = new TextEncoder()
   const sse = new SseDecoder()
   let sawToolCalls = false
-  let emittedDone = false
+  let emittedFinishReason = false
+  let upstreamEnded = false
   let upstreamError: Error | undefined
   let usage: Record<string, number> | undefined
 
@@ -91,13 +93,21 @@ export function bridgeTraeSoloStream(response: Response, model: string): Respons
             ...decoded.outputTokens === undefined ? {} : { completion_tokens: decoded.outputTokens },
             ...decoded.totalTokens === undefined ? {} : { total_tokens: decoded.totalTokens },
           }
-        } else if (decoded.type === 'done' && !emittedDone) {
-          emittedDone = true
-          if (upstreamError !== undefined) {
-            controller.error(upstreamError)
-            return
+        } else if (decoded.type === 'done') {
+          upstreamEnded = true
+          // Trae may send both `event: done` and a trailing `[DONE]`. Emit one
+          // OpenAI finish chunk only; pi-ai requires a non-null finish_reason
+          // before the stream closes.
+          if (!emittedFinishReason) {
+            // Mark the terminal state before erroring the controller so the
+            // post-loop fallback never enqueues after controller.error().
+            emittedFinishReason = true
+            if (upstreamError !== undefined) {
+              controller.error(upstreamError)
+              return
+            }
+            controller.enqueue(chunk({}, sawToolCalls ? 'tool_calls' : decoded.finishReason || 'stop'))
           }
-          controller.enqueue(chunk({}, sawToolCalls ? 'tool_calls' : decoded.finishReason))
         }
       }
       try {
@@ -107,11 +117,16 @@ export function bridgeTraeSoloStream(response: Response, model: string): Respons
           for (const event of sse.push(decoder.decode(next.value, { stream: true }))) consume(event)
         }
         for (const event of sse.finish()) consume(event)
-        if (upstreamError !== undefined && !emittedDone) {
+        if (upstreamError !== undefined && !upstreamEnded) {
           controller.error(upstreamError)
           return
         }
-        if (!emittedDone) controller.enqueue(chunk({}, sawToolCalls ? 'tool_calls' : 'stop'))
+        // A clean EOF is a valid Trae termination even when it omits an
+        // explicit done event. Synthesize the required OpenAI finish chunk.
+        if (!emittedFinishReason) {
+          emittedFinishReason = true
+          controller.enqueue(chunk({}, sawToolCalls ? 'tool_calls' : 'stop'))
+        }
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))
         controller.close()
       } catch (error) {
@@ -125,19 +140,57 @@ export function bridgeTraeSoloStream(response: Response, model: string): Respons
   return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
 }
 
+/** Resolves a display model id to the real llm_utils_chat config_name. */
+export type TraeWireResolver = (displayId: string) => string | undefined
+
 /** Native SOLO client wrapper used by the loopback OpenAI adapter. */
 export class TraeSoloBridge implements TraeUpstreamClient {
-  constructor(private readonly upstream: TraeUpstreamClient) {}
+  constructor(
+    private readonly upstream: TraeUpstreamClient,
+    private readonly catalog?: Pick<TraeCatalog, 'current'>,
+    private readonly wireResolver?: TraeWireResolver,
+  ) {}
 
   async chatStream(bodyJson: string, signal?: AbortSignal): Promise<TraeChatResult> {
+    // The model id doubles as the SSE chunk label; one model = one id, so the
+    // label is exactly what DSH requested. DSH may retain a reasoning selection
+    // while switching models: strip that stale option unless this exact model
+    // advertises the corresponding wire value.
     let model = 'glm-5.2'
+    let prepared = bodyJson
     try {
       const input = JSON.parse(bodyJson) as Record<string, unknown>
-      if (typeof input['model'] === 'string' && input['model'] !== '') model = input['model'].endsWith('@1m') ? input['model'].slice(0, -3) : input['model']
+      if (typeof input['model'] === 'string' && input['model'] !== '') model = input['model']
+      // Resolve the display model id to the real llm_utils_chat config_name.
+      // The Remote directory id may differ from the wire id (e.g. Seed-Code).
+      // Prefer the persisted catalog's `wireConfigName` when present, then fall
+      // back to the startup wire resolver keyed by display name/id; the resolver
+      // never depends on a user-refreshed or re-saved directory.
+      const entry = this.catalog?.current().find(item => item.id === model)
+      const wireModel = entry?.wireConfigName
+        ?? this.wireResolver?.(model)
+        ?? this.wireResolver?.(entry?.name ?? '')
+        ?? model
+      if (wireModel !== input['model']) {
+        input['model'] = wireModel
+        prepared = JSON.stringify(input)
+      }
+      if (typeof input['reasoning_effort'] === 'string') {
+        const info = entry
+        const efforts = info?.reasoningEfforts
+        const requested = input['reasoning_effort']
+        const mapped = efforts?.[requested as keyof typeof efforts]
+        const allowed = efforts === undefined
+          ? []
+          : Object.values(efforts).filter((value): value is string => typeof value === 'string')
+        if (typeof mapped === 'string') input['reasoning_effort'] = mapped
+        else if (!allowed.includes(requested)) delete input['reasoning_effort']
+        prepared = JSON.stringify(input)
+      }
     } catch {
       return { ok: false, status: 400, kind: 'client', message: 'invalid JSON request' }
     }
-    const result = await this.upstream.chatStream(bodyJson, signal)
+    const result = await this.upstream.chatStream(prepared, signal)
     if (!result.ok) return result
     return { ok: true, response: bridgeTraeSoloStream(result.response, model) }
   }

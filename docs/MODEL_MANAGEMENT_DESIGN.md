@@ -28,7 +28,7 @@
 - 积分倍率与 1M 上下文只展示已验证的上游数据；未取得真实字段时显示“待上游确认”或暂不展示。
 - 不把 access token、refresh token、邮箱、手机号或稳定用户 ID 传到浏览器。
 - DSH 当前工作目录不作为 Trae 云端可访问路径处理；它由 DSH system prompt/消息上下文告知模型，文件访问仍必须通过 DSH 工具完成。
-- SOLO Remote bridge 必须保留完整有序文本消息（system/assistant/tool/user），不得压缩成最后一条 user message。
+- 模型调用只允许经过能返回结构化 `tool_calls` 的 `llm_utils_chat` 路径；不得用只提取最终文本的远程会话轮询桥替代。
 
 ## 首版效果
 
@@ -46,24 +46,48 @@ Trae
 
 刷新模型时，调用 Trae 模型目录接口，将结果作为候选项交给用户勾选；刷新本身不直接覆盖已保存列表。
 
-## 已验证的 Trae 模型元数据来源
+## Trae 模型元数据来源
 
-当前真实接口：
+模型刷新以 **Remote 能力目录为骨架**，模型调用仍独立使用能返回结构化 `tool_calls` 的 `llm_utils_chat`：
 
-```text
-GET https://solo.trae.cn/api/remote/v1/models?functions=solo_agent_remote,solo_work_remote
-```
+1. **主源（模型骨架）**：Remote `/models` 目录提供展示 id、展示名、上下文窗口、Max 窗口、积分倍率、推理档位与 multimodal：
+   ```text
+   GET https://solo.trae.cn/api/remote/v1/models?functions=solo_agent_remote,solo_work_remote
+   ```
 
-只使用 `solo_agent_remote` 组，并按模型 wire name 去重。已验证字段映射：
+2. **补充源（wire id 映射）**：`get_detail_param` 只用于解析每个展示名对应的真正 `config_name`（`llm_utils_chat` 接受的 id），不决定模型列表本身：
+   ```text
+   POST https://trae-api-cn.mchost.guru/api/ide/v1/get_detail_param
+   function = solo_work_lite
+   ```
 
-| Trae 字段 | 用途 |
-| --- | --- |
-| `context_window_tokens.dev` | 普通模型上下文 |
-| `context_window_tokens.max` + `max_mode:true` | 是否可生成 1M 变体 |
-| `features` 二次 JSON 解析后的 `consumption_rate.data.rate` | 积分消耗倍率 |
-| `reasoning_effort_config.options` | 推理强度档位 |
-| `reasoning_effort_config.default_level` | 默认推理强度 |
-| `multimodal` | 文本/图片输入能力 |
+两者按**展示名 / config_name** 两级 join：Remote 目录是骨架（`id`/名称/上下文/积分/推理），`get_detail_param` 只附加 `wireConfigName`。join 优先级：
+
+1. `wire.config_name` == remote `id`（多数情况，两者相同，无需 `wireConfigName`）；
+2. `wire.display_name` == remote 展示名（历史改名场景，`wireConfigName` 记为 config_name）。
+
+**关键约束（2026-08-30 实测）**：Remote 目录里存在 `get_detail_param` 里**没有对应 `config_name`** 的模型（`Doubao-Seed-Code`、`glm-5.3`），这类模型对 `llm_utils_chat` 必然返回 `4001 "param is invalid"`。因此 join 不到任何 wire 行的 remote 行必须**从目录剔除**，不能对外暴露一个每次调用都失败的模型。
+
+> 为什么需要 `get_detail_param` 补充 wire id：两套接口对同一模型使用不同 id。只有 `get_detail_param` 的 `config_name` 才是 `llm_utils_chat` 真正接受的 id，Remote 目录的 `name` 只是展示名。2026-08-30 实测 `Doubao-Seed-Code`（Remote 展示 id）已经**不是**任何 `config_name`——Seed-Code 已下线/改名（现为 `Doubao-Seed-2.0-Code`、`seed-code-pro-0430`），发 `config_name=Doubao-Seed-Code` 必失败。
+
+已验证字段映射：
+
+| 来源 | Trae 字段 | 用途 |
+| --- | --- | --- |
+| remote | `name` | DSH 模型 id（展示 id） |
+| remote | `display_name` | 模型展示名 |
+| remote | `context_window_tokens.dev` | 默认 DSH 上下文预算 |
+| remote | `context_window_tokens.max` + `max_mode:true` | 可选的 Max 上下文预算；不生成第二个模型 id |
+| remote | `features` 二次 JSON 解析后的 `consumption_rate.data.rate` | 积分消耗倍率 |
+| remote | `reasoning_effort_config.options` / `default_level` | 推理强度档位 |
+| remote | `multimodal` | 文本/图片输入能力（仅展示，不作为图片授权依据） |
+| wire | `config_name` | `wireConfigName`：发往 `llm_utils_chat` 时替换展示 id 的 wire id |
+| wire | `display_config.display_name` | join 用的展示名 |
+| wire | `model_detail_list[].prompt_max_tokens` | wire 侧上下文窗口（`get_detail_param` **没有** `max_input_tokens` 字段） |
+| wire | `model_detail_list[].max_tokens` | wire 侧最大输出（**没有** `max_output_tokens` 字段） |
+| wire | `model_detail_list[].model_name` | 底层 checkpoint 名（带 `__dev`/`__max` 后缀），**不是** `llm_utils_chat` 接受的 `config_name`，不可用于请求 |
+
+Remote 目录客户端不提供聊天方法；`TraeSoloRemoteBridge` 和 Remote 会话创建/轮询逻辑已删除，避免再次混用两个不兼容的协议族。
 
 PiAiAdapter 的内部档位映射仅用于适配层，发往 Trae 时还原其原始值：
 
@@ -73,17 +97,17 @@ Trae high       <-> PiAi high
 Trae extra_high <-> PiAi xhigh
 ```
 
-UI 显示为“轻 / 高 / 极高”。未返回 `reasoning_effort_config` 的模型只记录“支持推理”，不虚构档位。
+UI 直接显示 DSH 档位标识 `low / high / xhigh`，与同系列 WorkBuddy 卡片一致。未返回 `reasoning_effort_config` 的模型只记录“支持推理”，不虚构档位。
 
 ## 后续模型详情
 
 ```text
 Qwen3.8-Max
 ├─ 积分消耗速度：1.50 倍（只读）
-├─ 支持的思考强度：轻 / 高 / 极高
-├─ 默认思考强度：高
-└─ 更大上下文（Max）：支持 / 不支持
-   └─ 开启后上下文窗口 1M；更多积分消耗
+├─ 支持的思考强度：low / high / xhigh
+├─ 默认思考强度：high
+└─ DSH 上下文预算：200K / 1M
+   └─ 一个模型 id，按预算调整 DSH 的有效上下文，不生成 @1m 变体
 ```
 
 ## 实施阶段
@@ -105,9 +129,10 @@ Qwen3.8-Max
 ### 阶段 3：Trae 专属能力
 
 - 恢复并验证积分消耗倍率字段；
-- 恢复并验证 1M 上下文支持字段及请求参数；
-- 仅对支持的模型展示 1M 开关；
-- 验证推理强度和 1M 设置真实进入上游请求。
+- 恢复并验证 Max 上下文支持字段；
+- 仅对支持的模型展示默认 / Max 上下文预算单选；
+- 一个上游模型只注册一个 DSH 模型 id，不生成 `@1m` 变体；
+- 验证推理强度和上下文预算真实进入 DSH 模型元数据。
 
 ## 验收标准
 
@@ -115,4 +140,4 @@ Qwen3.8-Max
 - 刷新失败不破坏现有模型列表；
 - 模型列表变化后 DSH provider catalog 同步更新；
 - 不影响其他 provider 的模型设置体验；
-- 未验证的倍率、推理强度和 1M 能力不得伪造。
+- 未验证的倍率、推理强度和 Max 上下文能力不得伪造；模型目录中不得出现 `@1m` 变体。

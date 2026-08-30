@@ -5,14 +5,14 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
 import { TraeCredentialStore } from './auth.ts'
-import { deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, TraeCatalog, type TraeModelInfo } from './catalog.ts'
+import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential } from './refresh.ts'
 import { readTraeIdentity } from './identity.ts'
 import { traeStorageCandidates } from './paths.ts'
 import { createTraeShim } from './shim.ts'
 import { TraeSoloUpstreamClient } from './solo.ts'
 import { TraeSoloBridge } from './solo-bridge.ts'
-import { TraeSoloRemoteClient } from './solo-remote.ts'
+import { TraeSoloRemoteCatalogClient } from './solo-remote.ts'
 import { TraeRawChatUpstreamClient } from './raw-upstream.ts'
 import { createTraeRawGateway } from './raw-gateway.ts'
 import { resolveTraeRawRuntime } from './raw-resolver.ts'
@@ -23,7 +23,7 @@ import { registerTraeUsageRoute } from './web-status.ts'
 
 export { createTraeAdapter, TRAE_PROVIDER, TRAE_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 export { normalizeTraeCredential, traeOwnAuthPath, TraeCredentialStore, type TraeCredential } from './auth.ts'
-export { discoveredCatalog, FALLBACK_TRAE_MODELS, TraeCatalog, type TraeModelInfo } from './catalog.ts'
+export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
 export { decryptTraeStorageValue, parseTraeAuthValue, parseTraeStorageDocument } from './decrypt.ts'
 export { identityHeaders, readTraeIdentity, type TraeIdentity } from './identity.ts'
 export { parseObservedModelConfig, type TraeObservedModelConfig } from './model-config.ts'
@@ -51,8 +51,7 @@ export { refreshTraeCredential } from './refresh.ts'
 export { decodeTraeEvent, SseDecoder, type SseEvent, type TraeStreamEvent } from './sse.ts'
 export { prepareSoloBody, TraeSoloUpstreamClient, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_FUNCTION, TRAE_SOLO_MODELS_PATH, type TraeSoloClientOptions } from './solo.ts'
 export { bridgeTraeSoloStream, TraeSoloBridge } from './solo-bridge.ts'
-export { TraeSoloRemoteClient, TRAE_SOLO_REMOTE_BASE, TRAE_SOLO_REMOTE_MODELS, type TraeSoloRemoteOptions } from './solo-remote.ts'
-export { TraeSoloRemoteBridge } from './solo-remote-bridge.ts'
+export { TraeSoloRemoteCatalogClient, TRAE_SOLO_REMOTE_BASE, type TraeSoloRemoteCatalogOptions } from './solo-remote.ts'
 export { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
 export { TRAE_PAY_BASE, TraeUsageClient, type TraeActivityRule, type TraeCheckinStatus, type TraeUsageOptions, type TraeUsagePack, type TraeUsageSnapshot, type TraeUsageSummary, type TraeUsageView } from './usage.ts'
 export { registerTraeUsageRoute, traeWebUsage, type TraeUsageRouteOptions } from './web-status.ts'
@@ -73,8 +72,10 @@ export interface Config {
   lastCatalog?: TraeModelInfo[]
   /** The user's ordinary-model selection, as model id (= Trae name). */
   enabledModelIds?: string[]
-  /** The user's 1M selection, as base-model id. */
-  enabled1mModels?: string[]
+  /** Local DSH context budget per model; a value may only select an advertised window. */
+  contextBudgets?: Record<string, number>
+  /** Models the user explicitly enabled for image input; text is always enabled. */
+  imageModelIds?: string[]
   /** Legacy generated runtime catalog; kept for backwards compatibility. */
   models?: TraeModelInfo[]
 }
@@ -93,25 +94,51 @@ export const Config: z<Config> = z.object({
   accountId: z.string().description('Selected local Trae account id (never a token)'),
   lastCatalog: z.array(modelConfig).description('Last refreshed Trae raw model directory shown by the plugin card') as z<TraeModelInfo[]>,
   enabledModelIds: z.array(z.string()).default([]).description('Trae model ids the user enabled'),
-  enabled1mModels: z.array(z.string()).default([]).description('Trae model ids whose 1M variants are enabled'),
+  contextBudgets: z.dict(z.number().step(1).min(1)).default({}).description('Local DSH context budget per Trae model'),
+  imageModelIds: z.array(z.string()).default([]).description('Trae model ids the user explicitly enabled for image input'),
   models: z.array(modelConfig).description('Legacy generated Trae model list') as z<TraeModelInfo[]>,
 })
 
 export function apply(ctx: Context, config: Config): void {
   const catalog = new TraeCatalog()
   const enabledSet = (value: Config): ReadonlySet<string> => new Set(value.enabledModelIds ?? [])
-  const enabled1mSet = (value: Config): ReadonlySet<string> => new Set(value.enabled1mModels ?? [])
-  // Runtime catalog derives from the last-refreshed raw directory plus the
-  // user's selection. The legacy `models` field remains as a fallback for
-  // configurations saved before this split.
-  const configuredModels = (value: Config): readonly TraeModelInfo[] => {
-    if (value.lastCatalog?.length) return deriveCatalog(value.lastCatalog, enabledSet(value), enabled1mSet(value))
-    return value.models?.length ? value.models : FALLBACK_TRAE_MODELS
+  const imageSet = (value: Config): ReadonlySet<string> => new Set(value.imageModelIds ?? [])
+  // Display keys (lowercased id AND name) of every model known to be callable
+  // via `llm_utils_chat`, populated once `discoverModels` merges Remote with
+  // `get_detail_param`. A model whose id and name are both absent here is a dead
+  // config_name (Remote advertises it, `get_detail_param` has no match, e.g.
+  // `Doubao-Seed-Code` / `glm-5.3`) and must never be served — even from a stale
+  // saved `lastCatalog` / `models` / `enabledModelIds` that still lists it.
+  const callableKeys = new Set<string>()
+  // Drop dead rows from a (possibly stale) saved directory. No-op when the wire
+  // map has not been resolved yet (startup discovery failed or is in flight),
+  // so a transient network failure never hides the whole catalog.
+  const dropDeadModels = (rows: readonly TraeModelInfo[]): readonly TraeModelInfo[] => {
+    if (callableKeys.size === 0) return rows
+    return rows.filter(model =>
+      callableKeys.has(model.id.trim().toLowerCase()) || callableKeys.has(model.name.trim().toLowerCase()))
   }
+  // Runtime catalog derives from the last-refreshed raw directory plus the
+  // user's selection and context budgets. Legacy `models` and pre-budget
+  // `lastCatalog` rows are sanitized, so saved `@1m` variants cannot return.
+  // Dead config_names are dropped against the live wire map, so a stale save
+  // cannot resurrect `Doubao-Seed-Code` / `glm-5.3`. An empty selection serves
+  // the whole directory, so a never-configured plugin still exposes models.
+  const derive = (value: Config, raw: readonly TraeModelInfo[]): readonly TraeModelInfo[] => {
+    const selectedImages = imageSet(value)
+    const derived = deriveCatalog(applyImageSelection(sanitizeCatalog(dropDeadModels(raw)), selectedImages), enabledSet(value), value.contextBudgets ?? {})
+    return derived.length > 0 ? derived : applyImageSelection(dropDeadModels(FALLBACK_TRAE_MODELS), selectedImages)
+  }
+  const configuredModels = (value: Config): readonly TraeModelInfo[] =>
+    value.lastCatalog?.length ? derive(value, value.lastCatalog)
+      : value.models?.length ? derive(value, value.models)
+        : applyImageSelection(dropDeadModels(FALLBACK_TRAE_MODELS), imageSet(value))
   // What the plugin card displays: the last-refreshed raw directory, so the
   // user re-reads the current Trae catalog rather than a stale saved snapshot.
   const displayModels = (value: Config): readonly TraeModelInfo[] =>
-    value.lastCatalog?.length ? value.lastCatalog : (value.models?.length ? value.models : FALLBACK_TRAE_MODELS)
+    value.lastCatalog?.length ? dropDeadModels(sanitizeCatalog(value.lastCatalog))
+      : value.models?.length ? dropDeadModels(sanitizeCatalog(value.models))
+        : dropDeadModels(FALLBACK_TRAE_MODELS)
   const store = new TraeCredentialStore({
     ...config.authFile === undefined ? {} : { storagePath: config.authFile },
     edition: config.edition ?? 'auto',
@@ -129,9 +156,22 @@ export function apply(ctx: Context, config: Config): void {
     credential: () => store.resolve(),
     identity,
     baseUrl: 'https://trae-api-cn.mchost.guru',
+    log: (message, detail) => ctx.logger.warn(message, detail),
   })
-  const remote = new TraeSoloRemoteClient({ credential: () => store.resolve() })
-  const upstream = new TraeSoloBridge(solo)
+  const remoteCatalog = new TraeSoloRemoteCatalogClient({ credential: () => store.resolve() })
+  // Keep the native llm_utils_chat bridge as the only chat route: unlike the
+  // polling Remote session API, it preserves Trae's structured tool_calls so
+  // DSH can execute local read/write/bash tools and continue the agent loop.
+  // A wire resolver maps each display model id to its real llm_utils_chat
+  // config_name. It is populated once at startup from get_detail_param and
+  // never depends on a user-refreshed or re-saved directory, so Seed-Code and
+  // other models whose wire id differs from the display id resolve correctly
+  // even on a fresh install.
+  const wireById = new Map<string, string>()
+  const wireByName = new Map<string, string>()
+  const wireResolver = (displayId: string): string | undefined =>
+    wireById.get(displayId) ?? wireByName.get(displayId.trim().toLowerCase())
+  const upstream = new TraeSoloBridge(solo, catalog, wireResolver)
   // The shim always sees a stable client; the Raw gateway may replace the
   // delegate asynchronously, but it stays disabled until a probe succeeds.
   const delegating = new TraeDelegatingUpstreamClient(upstream)
@@ -167,52 +207,57 @@ export function apply(ctx: Context, config: Config): void {
 
   // Read-only usage/credit summary served to the browser half. Optional on the
   // `webServer` seam; absent in headless runs, the host provider still works.
-  // `llm_utils_chat` bills general credits only; an account with zero general
-  // credits (e.g. this CN account) fails every request with 4008 / empty
-  // response. Pick a default that has general credits so the connector works
-  // out of the box, while still honouring an explicit account selection.
-  const selectPreferredGeneralAccount = async (): Promise<void> => {
-    try {
-      const accounts = await store.accounts()
-      const scored: { id: string; general: number }[] = []
-      for (const account of accounts) {
-        try {
-          store.selectAccount(account.id)
-          const credential = await store.resolve()
-          const snapshot = await new TraeUsageClient({ credential: async () => credential }).snapshot()
-          const general = Math.round(snapshot.packs
-            .filter(pack => pack.availableEndpoint === 0)
-            .reduce((sum, pack) => sum + Math.max(0, (pack.creditsLimit ?? 0) - (pack.consumedCredits ?? 0)), 0) * 10_000) / 10_000
-          scored.push({ id: account.id, general })
-        } catch (error: unknown) {
-          // One account whose token/snapshot fails must not block choosing a
-          // usable default from the others.
-          ctx.logger.warn(`dsh-connect-trae: account ${account.id} unavailable for default selection`, error)
-        }
-      }
-      scored.sort((a, b) => b.general - a.general)
-      store.setPreferAccountIds(scored.filter(item => item.general > 0).map(item => item.id))
-      // Restore the user's explicit selection (if any) before first use.
-      store.setSource(config.authFile, config.edition ?? 'auto', config.accountId)
-    } catch (error: unknown) {
-      ctx.logger.warn('dsh-connect-trae: default account selection failed; continuing', error)
-    }
-  }
+  //
+  // Account selection is strictly the user's choice: the store resolves the
+  // explicitly selected `accountId` verbatim, and only falls back to the first
+  // discovered account when nothing has been selected yet. The plugin must NOT
+  // silently switch to a different account that happens to have general credits
+  // — that would bill the wrong account against the user's intent.
   const usageClient = new TraeUsageClient({ credential: () => store.resolve() })
   let current = () => config
   let invalidateAdapter = (): void => {}
   const discoverModels = async (signal?: AbortSignal): Promise<readonly TraeModelInfo[]> => {
-    const discovered = await remote.fetchModels(signal)
-    // Discovery is a draft operation: do not mutate the runtime catalog until
-    // the user explicitly saves the selected snapshot and 1M switches.
-    return discoveredCatalog(discovered, new Set())
+    // The Remote /models directory is the model skeleton (display id, name,
+    // context, credit, reasoning). get_detail_param only supplies the real
+    // llm_utils_chat config_name for models whose display id differs from the
+    // wire id (e.g. Seed-Code); it does not define the catalog itself.
+    const [remote, wire] = await Promise.all([
+      remoteCatalog.fetchModels(signal),
+      solo.fetchModels(signal),
+    ])
+    const merged = mergeTraeModelSources(remote, wire)
+    // Record every callable display key (id and name) so stale saved catalogs
+    // are filtered against the live wire map and dead config_names cannot be
+    // resurrected from an old `lastCatalog` / `models` / `enabledModelIds`.
+    callableKeys.clear()
+    for (const model of merged) {
+      callableKeys.add(model.id.trim().toLowerCase())
+      callableKeys.add(model.name.trim().toLowerCase())
+    }
+    // Populate the startup wire resolver (display id and display name → wire
+    // config_name) so the chat bridge resolves the real config_name even when
+    // the persisted catalog lacks `wireConfigName` (the settings schema drops
+    // unknown fields on save/load).
+    wireById.clear()
+    wireByName.clear()
+    for (const model of merged) {
+      if (model.wireConfigName !== undefined) {
+        wireById.set(model.id, model.wireConfigName)
+        wireByName.set(model.name.trim().toLowerCase(), model.wireConfigName)
+      }
+    }
+    // Persist the merged catalog (including each model's wireConfigName) into
+    // the live catalog the chat bridge reads, so requests resolve the real
+    // config_name even before the user re-saves the refreshed directory.
+    const next = applyImageSelection(merged, imageSet(current()))
+    catalog.set(next)
+    return merged
   }
   ctx.inject(['webServer'], (webCtx) => registerTraeUsageRoute(webCtx, {
     store,
     client: usageClient,
     displayModels: () => displayModels(current()),
     enabledModelIds: () => current().enabledModelIds ?? [],
-    enabled1mModelIds: () => current().enabled1mModels ?? [],
     discoverModels,
     rawDiagnostic: () => rawDiagnostic(),
   }))
@@ -235,7 +280,14 @@ export function apply(ctx: Context, config: Config): void {
 
   void shim.ready.then(async () => {
     if (stopped) return
-    await selectPreferredGeneralAccount()
+    // Resolve the wire-id map once at startup before serving requests, so the
+    // chat bridge can translate display ids to real config_names without the
+    // user ever opening the model card or re-saving the directory.
+    try {
+      await discoverModels()
+    } catch (error: unknown) {
+      ctx.logger.warn('dsh-connect-trae: wire-id resolution failed at startup; falling back to display ids', error)
+    }
     catalog.set(configuredModels(current()))
     const trae = createTraeAdapter({
       shim,
@@ -249,12 +301,22 @@ export function apply(ctx: Context, config: Config): void {
       releaseAdapter = ctx.llm.registerAdapter([TRAE_PROVIDER], trae.adapter)
       ctx.llm.registerModelDiscovery(TRAE_SETTINGS_NS, async (request) => {
         if (request.provider !== TRAE_PROVIDER) return []
-        const next = await discoverModels(request.signal)
+        // Discovery must advertise the same image capability as the live
+        // adapter catalog. The upstream flag is deliberately ignored; only the
+        // user's explicit `imageModelIds` selection is authoritative.
+        const next = applyImageSelection(
+          await discoverModels(request.signal),
+          imageSet(current()),
+        )
         return next.map(model => ({
           id: model.id,
           name: model.name,
           ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
           ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
+          // Current dsh-llm discovery types do not yet declare this field, but
+          // model-management consumers already understand it. Keep the value
+          // aligned with the adapter catalog; DSH core may discard it today.
+          inputModalities: traeInputModalities(model),
         }))
       })
       releaseDirectory = ctx.llm.registerConfigurableProviders([{

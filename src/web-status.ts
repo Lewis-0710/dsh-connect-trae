@@ -26,12 +26,10 @@ export type { TraeWebUsage } from './status-paths.ts'
 export interface TraeUsageRouteOptions {
   store: TraeCredentialStore
   client: TraeUsageClient
-  /** The last-refreshed Trae raw directory (no generated @1m variants) for card display. */
+  /** The last-refreshed Trae raw directory (one entry per upstream model) for card display. */
   displayModels(): readonly TraeModelInfo[]
-  /** The user's ordinary-model selection stored as model id (= Trae name). */
+  /** The user's model selection stored as model id (= Trae name). */
   enabledModelIds(): readonly string[]
-  /** The user's 1M selection stored as base-model id. */
-  enabled1mModelIds(): readonly string[]
   discoverModels?(signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
   rawDiagnostic?(): TraeRawDiagnostic
 }
@@ -113,7 +111,6 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWeb
     accounts,
     models: deps.displayModels().map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
     enabledModelIds: [...deps.enabledModelIds()],
-    enabled1mModelIds: [...deps.enabled1mModelIds()],
     ...deps.rawDiagnostic === undefined ? {} : { rawChat: deps.rawDiagnostic() },
   }
   try {

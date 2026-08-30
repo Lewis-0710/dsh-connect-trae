@@ -29,7 +29,6 @@ function makeRoute(options: { fetchImpl?: typeof fetch } = {}): TraeUsageRouteOp
       { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 },
     ],
     enabledModelIds: () => ['DeepSeek-V4-Flash'],
-    enabled1mModelIds: () => [],
     rawDiagnostic: () => ({ state: 'protocol-gated', status: 400, checkedAtMs: 123 }),
   }
 }
@@ -77,7 +76,6 @@ describe('traeWebUsage', () => {
       models: [{ id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 }],
       rawChat: { state: 'protocol-gated', status: 400, checkedAtMs: 123 },
       enabledModelIds: ['DeepSeek-V4-Flash'],
-      enabled1mModelIds: [],
     })
     expect(result.credits).toEqual({
       total: 7500,

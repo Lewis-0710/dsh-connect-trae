@@ -113,7 +113,6 @@ export class TraeCredentialStore {
   private storagePathOverride: string | undefined
   private edition: TraeEdition | 'auto'
   private accountId: string | undefined
-  private preferIds: string[] = []
   private readonly ownPath: string
   private readonly refresh: TraeCredentialStoreOptions['refresh']
   private readonly refreshMarginMs: number
@@ -140,17 +139,6 @@ export class TraeCredentialStore {
     this.inflight = undefined
   }
 
-  /**
-   * Preferred account ordering used when no account is explicitly selected.
-   * The connector can only bill the `llm_utils_chat` channel against general
-   * credits, so accounts with zero general credits should not become the
-   * default or they fail with 4008 / empty responses.
-   */
-  setPreferAccountIds(ids: readonly string[]): void {
-    this.preferIds = [...ids]
-    this.inflight = undefined
-  }
-
   candidates(): TraeStorageCandidate[] {
     if (this.storagePathOverride !== undefined) {
       const edition = this.edition === 'auto' ? 'cn' : this.edition
@@ -164,13 +152,13 @@ export class TraeCredentialStore {
       : all.filter(candidate => candidate.edition === this.edition && (candidate.edition === 'cn' || candidate.edition === 'solo'))
   }
 
-  /** First credential matching the preferred ordering, else the first live one. */
+  /**
+   * Deterministic default when no account is explicitly selected: the first
+   * discovered account. This is NOT credit-seeking — it never reorders accounts
+   * to find one with general credits. The plugin bills exactly the account the
+   * user selected, or the first account when nothing has been selected yet.
+   */
   private preferred(credentials: TraeCredential[]): TraeCredential | undefined {
-    if (credentials.length === 0) return undefined
-    for (const id of this.preferIds) {
-      const match = credentials.find(credential => traeAccountId(credential) === id)
-      if (match !== undefined) return match
-    }
     return credentials[0]
   }
 
@@ -191,10 +179,13 @@ export class TraeCredentialStore {
   async current(): Promise<TraeCredential | undefined> {
     const credentials = await this.readAll()
     if (this.accountId === undefined) return this.preferred(credentials)
-    // A saved account can disappear when Trae replaces its local login. Fall
-    // back to the first live account so the status route remains usable and the
-    // user can select another account instead of being trapped behind HTTP 500.
-    return credentials.find(credential => traeAccountId(credential) === this.accountId) ?? this.preferred(credentials)
+    const selected = credentials.find(credential => traeAccountId(credential) === this.accountId)
+    // A saved account can disappear when Trae replaces its local login. Do NOT
+    // silently fall back to a different account: that would bill a different
+    // account than the one the user explicitly selected. Return undefined so the
+    // caller surfaces "no signed-in account" and the user can re-select, instead
+    // of the plugin quietly switching accounts behind their back.
+    return selected
   }
 
   async resolve(): Promise<TraeCredential> {

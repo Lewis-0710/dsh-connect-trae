@@ -7,13 +7,12 @@
 ```text
 DSH PiAiAdapter
   -> 安全loopback shim
-  -> TraeSoloRemoteBridge
-  -> TraeSoloRemoteClient
-  -> https://solo.trae.cn/api/remote/v1/chat_sessions
-  -> 轮询 /chat_sessions/:id/messages
-  -> 提取最终回答
-  -> 转换为OpenAI SSE
-  -> DSH
+  -> TraeSoloBridge
+  -> TraeSoloUpstreamClient
+  -> https://trae-api-cn.mchost.guru/api/agent/v3/llm_utils_chat
+  -> 转换 Trae function_call 为 OpenAI tool_calls
+  -> DSH 执行本地工具并回传结果
+  -> 连续 Agent 循环
 ```
 
 真实DeepSeek Flash验证已经成功：
@@ -24,38 +23,23 @@ DSH PiAiAdapter
 响应：OK
 ```
 
-测试使用当前本机 `TRAE SOLO CN 0.1.56` 的有效JWT，未使用旧版 `mchost.guru/llm_utils_chat` 通道。
+当前发布基线使用 `mchost.guru/llm_utils_chat` 的原生结构化工具调用通道；只返回最终文本的 Remote 会话路径已删除。
 
 ## 关键路线变化
 
-### 已放弃作为第一路线
-
-- Raw Chat v2：`/api/ide/v2/llm_raw_chat`，实测HTTP 400空响应。
-- 旧版SOLO：`mchost.guru/api/agent/v3/llm_utils_chat + solo_work_lite`，当前0.1.56实测HTTP 404。
-- 旧版模型发现：`/api/ide/v1/get_detail_param`，当前版本实测HTTP 404。
-
 ### 当前可用路线
 
-来自 `Oh-My-Trae/trae-solo-unlock` 的当前SOLO Web远程API：
+- 主调用：`mchost.guru/api/agent/v3/llm_utils_chat + solo_work_lite`。
+- 模型发现：只读 `solo.trae.cn/api/remote/v1/models` 目录接口。
+- Raw Chat v2：`/api/ide/v2/llm_raw_chat` 仍为默认关闭的研究路径。
 
-```text
-https://solo.trae.cn/api/remote/v1
-```
-
-调用流程：
-
-1. `POST /chat_sessions` 创建会话并发送首条消息。
-2. `GET /chat_sessions/:id/messages?page_size=50` 轮询结果。
-3. 从assistant message中提取：
-   - 任务树：`plan_item.tool_call_info.name === "finish"` → `params.summary`
-   - 简单数组：`type === "text"` → `text_content`或`data.content`
-4. 转换为OpenAI SSE，输出文本chunk、finish chunk和`[DONE]`。
+`solo.trae.cn/api/remote/v1/chat_sessions` 轮询路线已删除。它只能提取最终回答并输出 `finish_reason: stop`，不能把远端任务树还原成 DSH 可执行的结构化 `tool_calls`，会造成模型看似“不能读取本地文件”。
 
 ## 已实现模块
 
 ### DSH与安全层
 
-- `src/index.ts`：注册`trae` Provider，当前已接入`TraeSoloRemoteBridge`。
+- `src/index.ts`：注册`trae` Provider，当前已接入`TraeSoloBridge`。
 - `src/adapter.ts`：PiAiAdapter。
 - `src/shim.ts`：随机loopback端口、进程内secret、Host/Origin/Content-Type校验、请求取消。
 - `src/catalog.ts`：模型目录。
@@ -70,9 +54,9 @@ https://solo.trae.cn/api/remote/v1
 
 ### 协议
 
-- `src/solo-remote.ts`：当前成功的新版SOLO远程会话客户端。
-- `src/solo-remote-bridge.ts`：轮询结果转OpenAI SSE，接入shim。
-- `src/solo.ts`：旧版`llm_utils_chat + solo_work_lite`实现，保留作兼容研究，不作为当前主路径。
+- `src/solo.ts`：`llm_utils_chat + solo_work_lite` 主调用实现。
+- `src/solo-bridge.ts`：将 Trae SSE 的文本、推理与 `function_call` 转换为 OpenAI SSE 和结构化 `tool_calls`。
+- `src/solo-remote.ts`：仅用于模型刷新，只公开目录读取能力，不包含 Remote 聊天或会话轮询。
 - `src/raw-chat.ts` / `src/raw-upstream.ts`：Raw Chat研究实现，当前不启用。
 - `src/sse.ts`：通用SSE解析。
 - `src/reasoning.ts`：思考强度能力模型。

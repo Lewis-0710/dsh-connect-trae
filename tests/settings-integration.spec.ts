@@ -33,5 +33,23 @@ describe('Trae provider registration', () => {
     const models = await ctx.llm.listModels('trae')
     expect(models.map(model => model.id)).toContain('DeepSeek-V4-Flash')
     expect(models.map(model => model.id)).toContain('DeepSeek-V4-Pro')
+    expect(models.find(model => model.id === 'glm-5.2')?.inputModalities).toEqual(['text'])
+    expect(models.find(model => model.id === 'kimi-k2.6')?.inputModalities).toEqual(['text'])
+    expect(models.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text'])
+  })
+
+  it('applies the explicit image opt-in to the live adapter catalog', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    await ctx.plugin(Trae, { edition: 'auto' })
+    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
+
+    await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { imageModelIds: ['DeepSeek-V4-Pro'] })
+
+    const models = await ctx.llm.listModels('trae')
+    expect(models.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text', 'image'])
+    expect(models.find(model => model.id === 'DeepSeek-V4-Flash')?.inputModalities).toEqual(['text'])
   })
 })

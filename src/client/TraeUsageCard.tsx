@@ -49,7 +49,7 @@ if (typeof document !== 'undefined') {
 function formatNumber(value: number): string {
   return new Intl.NumberFormat(undefined, {
     minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
+    maximumFractionDigits: 0,
   }).format(value)
 }
 
@@ -65,8 +65,6 @@ function formatCapacity(value: number | undefined, unknown: string): string {
   if (value >= 1_000 && value % 1_000 === 0) return `${value / 1_000}K`
   return formatNumber(value)
 }
-
-const EFFORT_LABELS: Readonly<Record<string, string>> = { low: '轻', high: '高', xhigh: '极高' }
 
 function dotStyle(status: TraeWebUsage['status']): Record<string, string> {
   const color = status === 'signed-in'
@@ -86,7 +84,8 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   const [settingsRevision, setSettingsRevision] = useState(0)
   const [draftModels, setDraftModels] = useState<TraeWebModel[] | undefined>(undefined)
   const [draftEnabledIds, setDraftEnabledIds] = useState<Set<string> | undefined>(undefined)
-  const [draft1mIds, setDraft1mIds] = useState<Set<string> | undefined>(undefined)
+  const [draftImageIds, setDraftImageIds] = useState<Set<string> | undefined>(undefined)
+  const [draftContextBudgets, setDraftContextBudgets] = useState<Record<string, number> | undefined>(undefined)
   const [saving, setSaving] = useState(false)
   const [switchingAccount, setSwitchingAccount] = useState(false)
   const mounted = useRef(true)
@@ -177,17 +176,22 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
       })
       const body = await response.json() as { models?: TraeWebModel[] }
       if (!response.ok || !Array.isArray(body.models)) throw new Error(`HTTP ${response.status}`)
-      const fresh = body.models.filter(model => model.maxContext !== true)
-      // Map the old SAVED selection onto the fresh catalog by model id
-      // (= Trae name), so renames and additions never silently lose choices.
-      const oldEnabled = status.status === 'signed-in' ? new Set(status.enabledModelIds) : new Set<string>()
-      const old1m = status.status === 'signed-in' ? new Set(status.enabled1mModelIds) : new Set<string>()
+      const fresh = body.models
       const freshIds = new Set(fresh.map(model => model.id))
-      const stillEnabled = [...oldEnabled].filter(id => freshIds.has(id))
-      const still1m = [...old1m].filter(id => freshIds.has(id))
-      setDraftModels(fresh)
+      // Re-map the user's CURRENT selections (draft first, then saved) onto the
+      // fresh catalog by model id, so refresh never silently loses enabled
+      // choices, image opt-ins, or context budgets.
+      const stillEnabled = [...activeEnabledIds].filter(id => freshIds.has(id))
+      const stillImages = [...activeImageIds].filter(id => freshIds.has(id))
+      const stillBudgets: Record<string, number> = {}
+      for (const id of freshIds) {
+        const budget = activeContextBudgets[id]
+        if (typeof budget === 'number') stillBudgets[id] = budget
+      }
+      setDraftModels(fresh.map(model => ({ ...model, input: ['text'] })))
       setDraftEnabledIds(new Set(stillEnabled))
-      setDraft1mIds(new Set(still1m))
+      setDraftImageIds(new Set(stillImages))
+      setDraftContextBudgets(stillBudgets)
     } catch (error: unknown) {
       if (mounted.current) setStatus({ status: 'error', message: error instanceof Error ? error.message : t('row.requestFailed') })
     } finally {
@@ -196,22 +200,25 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   }
 
   const settingsValue = settingsScope?.getSnapshot().value
-  const enabled1mModels = new Set(
-    typeof settingsValue === 'object' && settingsValue !== null && Array.isArray((settingsValue as { enabled1mModels?: unknown }).enabled1mModels)
-      ? (settingsValue as { enabled1mModels: unknown[] }).enabled1mModels.filter((value): value is string => typeof value === 'string')
+  const savedContextBudgets = typeof settingsValue === 'object' && settingsValue !== null && typeof (settingsValue as { contextBudgets?: unknown }).contextBudgets === 'object' && (settingsValue as { contextBudgets?: unknown }).contextBudgets !== null
+    ? (settingsValue as { contextBudgets: Record<string, number> }).contextBudgets
+    : {}
+  const savedImageIds = new Set(
+    typeof settingsValue === 'object' && settingsValue !== null && Array.isArray((settingsValue as { imageModelIds?: unknown }).imageModelIds)
+      ? (settingsValue as { imageModelIds: unknown[] }).imageModelIds.filter((id): id is string => typeof id === 'string')
       : [],
   )
   void settingsRevision
   // The card always renders the last-refreshed raw directory (`status.models`
   // carries `lastCatalog`), never a stale saved snapshot. Enabled flags come
   // from the user's stored selection, re-mapped onto the current catalog by
-  // model id (= Trae name).
+  // model id (= Trae name); context budgets work the same way.
   const visibleModels = draftModels ?? (status.status === 'signed-in' ? status.models : [])
   const savedEnabledIds = status.status === 'signed-in' ? new Set(status.enabledModelIds) : new Set<string>()
-  const saved1mIds = status.status === 'signed-in' ? new Set(status.enabled1mModelIds) : new Set<string>()
   const activeEnabledIds = draftEnabledIds ?? savedEnabledIds
-  const active1mIds = draft1mIds ?? saved1mIds
-  const dirty = draftModels !== undefined || draftEnabledIds !== undefined || draft1mIds !== undefined
+  const activeImageIds = draftImageIds ?? savedImageIds
+  const activeContextBudgets = draftContextBudgets ?? savedContextBudgets
+  const dirty = draftModels !== undefined || draftEnabledIds !== undefined || draftImageIds !== undefined || draftContextBudgets !== undefined
 
   const toggleModel = (modelId: string): void => {
     const next = new Set(activeEnabledIds)
@@ -220,30 +227,39 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
     setDraftModels([...visibleModels])
   }
 
-  const toggle1m = (modelId: string): void => {
-    const next = new Set(active1mIds)
+  const toggleImage = (modelId: string): void => {
+    const next = new Set(activeImageIds)
     if (!next.delete(modelId)) next.add(modelId)
-    setDraft1mIds(next)
+    setDraftImageIds(next)
+    setDraftModels([...visibleModels])
+  }
+
+  const setContextBudget = (modelId: string, budget: number | undefined): void => {
+    const next = { ...activeContextBudgets }
+    if (budget === undefined) delete next[modelId]
+    else next[modelId] = budget
+    setDraftContextBudgets(next)
     setDraftModels([...visibleModels])
   }
 
   const discardModels = (): void => {
     setDraftModels(undefined)
     setDraftEnabledIds(undefined)
-    setDraft1mIds(undefined)
+    setDraftImageIds(undefined)
+    setDraftContextBudgets(undefined)
   }
 
   const saveModels = async (): Promise<void> => {
     if (settingsScope === undefined) return
     setSaving(true)
     try {
-      // Save the raw directory plus the pure selection. The Host derives the
-      // runtime catalog (ordinary + @1m variants) from these two on save/restart,
-      // so re-opening the card re-reads Trae's current catalog instead of a
-      // snapshot that can go stale.
-      await settingsScope.set('lastCatalog', visibleModels.filter(model => model.maxContext !== true))
+      // Save the raw directory plus the pure selection and budgets. The Host
+      // derives the runtime catalog from these on save/restart, so re-opening
+      // the card re-reads Trae's current catalog instead of a stale snapshot.
+      await settingsScope.set('lastCatalog', visibleModels.map(model => ({ ...model, input: ['text'] })))
       await settingsScope.set('enabledModelIds', [...activeEnabledIds])
-      await settingsScope.set('enabled1mModels', [...active1mIds].filter(id => activeEnabledIds.has(id)))
+      await settingsScope.set('imageModelIds', [...activeImageIds].filter(id => activeEnabledIds.has(id)))
+      await settingsScope.set('contextBudgets', activeContextBudgets)
       discardModels()
       await refreshUsage()
     } finally {
@@ -375,27 +391,50 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                                     {model.creditMultiplier === undefined ? null
                                       : <span className="dsm-trae-model-name-rate">({model.creditMultiplier.toFixed(2)}x)</span>}
                                   </span>
-                                  <span className="dsm-trae-model-id">{model.id}</span>
                                 </span>
                               </label>
-                              {model.maxContextWindow === undefined || model.maxContext === true ? null
-                                : <label className="dsm-trae-model-toggle">
-                                    <input
-                                      type="checkbox"
-                                      checked={active1mIds.has(model.id)}
-                                      disabled={!activeEnabledIds.has(model.id) || settingsScope?.getSnapshot().writable !== true || busy || saving}
-                                      onChange={() => { void toggle1m(model.id) }}
-                                    />
-                                    <span>{t('row.modelEnable1m')}</span>
-                                  </label>}
+                              <div className="dsm-trae-model-options">
+                                <label className="dsm-trae-model-image">
+                                  <input
+                                    type="checkbox"
+                                    checked={activeImageIds.has(model.id)}
+                                    disabled={settingsScope?.getSnapshot().writable !== true || saving}
+                                    onChange={() => { toggleImage(model.id) }}
+                                  />
+                                  <span>{t('row.modelImage')}</span>
+                                </label>
+                              <fieldset className="dsm-trae-context-budget" aria-label={t('row.contextBudget')}>
+                                {model.maxContextWindow !== undefined
+                                  ? <label>
+                                      <input
+                                        type="radio"
+                                        name={`context-${model.id}`}
+                                        checked={activeContextBudgets[model.id] !== model.maxContextWindow}
+                                        disabled={settingsScope?.getSnapshot().writable !== true || saving}
+                                        onChange={() => { setContextBudget(model.id, model.contextWindow) }}
+                                      />
+                                      <span>{formatCapacity(model.contextWindow, t('row.modelUnknown'))}</span>
+                                    </label>
+                                  : null}
+                                <label>
+                                  <input
+                                    type="radio"
+                                    name={`context-${model.id}`}
+                                    checked={model.maxContextWindow === undefined || activeContextBudgets[model.id] === model.maxContextWindow}
+                                    disabled={model.maxContextWindow === undefined || settingsScope?.getSnapshot().writable !== true || saving}
+                                    onChange={() => { setContextBudget(model.id, model.maxContextWindow) }}
+                                  />
+                                  <span>{formatCapacity(model.maxContextWindow ?? model.contextWindow, t('row.modelUnknown'))}</span>
+                                </label>
+                              </fieldset>
+                              </div>
                             </div>
                             <div className="dsm-trae-model-meta">
-                              <span>{t('row.modelContext', { context: formatCapacity(model.contextWindow, t('row.modelUnknown')) })}</span>
+                              <span>{t('row.modelContext', { context: formatCapacity(model.maxContextWindow ?? model.contextWindow, t('row.modelUnknown')) })}</span>
                               {model.maxTokens === undefined ? null
                                 : <span>{t('row.modelOutput', { output: formatCapacity(model.maxTokens, t('row.modelUnknown')) })}</span>}
-                              {model.maxContext === true ? <span>{t('row.modelMaxContext')}</span> : null}
                               {model.reasoning === undefined ? null
-                                : <span>{t('row.modelReasoning', { efforts: model.reasoning.supported.map(effort => EFFORT_LABELS[effort] ?? effort).join(' / ') })}</span>}
+                                : <span>{t('row.modelReasoning', { efforts: model.reasoning.supported.join(' / ') })}</span>}
                             </div>
                           </div>
                         ))}

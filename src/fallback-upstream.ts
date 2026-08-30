@@ -7,7 +7,7 @@ export interface TraeFallbackUpstreamOptions {
 }
 
 /**
- * Raw Chat first, SOLO Remote second. Fallback is intentionally narrow:
+ * Optional primary route first, native SOLO tool-call route second. Fallback is intentionally narrow:
  * only definitive pre-stream schema/route incompatibilities may retry the same
  * user request. Authentication, credit, rate, cancellation, transport/server
  * failures, and every successful Response are never replayed.

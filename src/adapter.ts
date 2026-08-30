@@ -5,7 +5,7 @@ import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import type { TraeCatalog, TraeModelInfo } from './catalog.ts'
+import { traeInputModalities, type TraeCatalog, type TraeModelInfo } from './catalog.ts'
 import type { TraeShim } from './shim.ts'
 
 export const TRAE_PROVIDER = 'trae'
@@ -37,7 +37,7 @@ function toPiModel(info: TraeModelInfo, baseUrl: string): Model<Api> {
     api: 'openai-completions',
     provider: TRAE_PROVIDER,
     baseUrl,
-    input: [...(info.input ?? ['text'])],
+    input: traeInputModalities(info),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: info.reasoningEfforts !== undefined,
     ...(info.reasoningEfforts === undefined ? {} : {
