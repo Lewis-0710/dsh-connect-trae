@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import * as dshSettings from '@deepseek-ai/dsh-settings'
+import type { SettingsSectionHooks } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
@@ -61,7 +62,15 @@ export { UnconfiguredTraeUpstreamClient, type TraeChatResult, type TraeUpstreamC
 
 export const name = 'dsh-connect-trae'
 export const inject = ['llm']
-export const TRAE_SETTINGS_NS = settingsNamespace('trae')
+/**
+ * Settings namespace, as a plain lowercase literal. DSH 0.1.2 removed the
+ * `settingsNamespace` brand constructor from the npm package (the Desktop
+ * host still ships it as a legacy shim), and every consumer of this constant —
+ * `registerModelDiscovery`, `registerConfigurableProviders`,
+ * `settings.installSection`, the settings test — takes it as a kebab string,
+ * so no branding is needed for either host generation.
+ */
+export const TRAE_SETTINGS_NS = 'trae'
 
 export interface Config {
   authFile?: string
@@ -266,7 +275,7 @@ export function apply(ctx: Context, config: Config): void {
     rawDiagnostic: () => rawDiagnostic(),
   }))
 
-  installSettingsSection(ctx, TRAE_SETTINGS_NS, Config, config, {
+  const sectionHooks: SettingsSectionHooks<Config> = {
     setSource(source) { current = source },
     onChange() {
       const next = current()
@@ -274,7 +283,24 @@ export function apply(ctx: Context, config: Config): void {
       catalog.set(configuredModels(next))
       invalidateAdapter()
     },
-  })
+  }
+  // DSH 0.1.2 replaced the free `installSettingsSection` helper with the
+  // `settings` service's `installSection` method. The Desktop host keeps the
+  // old helper as a legacy shim, but npm installs of 0.1.2 do not — and a
+  // named import of a missing export fails at ESM link time, so the plugin
+  // reads it defensively off the module namespace. Prefer the helper when it
+  // exists (0.1.1 hosts and shimmed 0.1.2 hosts) and fall back to the service
+  // method everywhere else, so one build serves both host generations.
+  const legacyInstallSettingsSection = (dshSettings as {
+    installSettingsSection?: (ctx: Context, ns: string, schema: z<Config>, entry: Config, hooks: SettingsSectionHooks<Config>) => void
+  }).installSettingsSection
+  if (typeof legacyInstallSettingsSection === 'function') {
+    legacyInstallSettingsSection(ctx, TRAE_SETTINGS_NS, Config, config, sectionHooks)
+  } else {
+    ctx.inject(['settings'], settingsCtx => {
+      settingsCtx.settings.installSection(ctx, TRAE_SETTINGS_NS, Config, config, sectionHooks)
+    })
+  }
 
   let stopped = false
   ctx.effect(() => () => {
@@ -303,13 +329,18 @@ export function apply(ctx: Context, config: Config): void {
     let releaseDirectory: (() => void) | undefined
     try {
       releaseAdapter = ctx.llm.registerAdapter([TRAE_PROVIDER], trae.adapter)
-      ctx.llm.registerModelDiscovery(TRAE_SETTINGS_NS, async (request) => {
+      ctx.llm.registerModelDiscovery(TRAE_SETTINGS_NS, async (request, signal) => {
         if (request.provider !== TRAE_PROVIDER) return []
         // Discovery must advertise the same image capability as the live
         // adapter catalog. The upstream flag is deliberately ignored; only the
         // user's explicit `imageModelIds` selection is authoritative.
+        //
+        // DSH 0.1.2 moved discovery cancellation from `request.signal` onto
+        // the callback's second argument; 0.1.1 hosts still pass it on the
+        // request object, so read both.
+        const cancellation = signal ?? (request as { signal?: AbortSignal }).signal
         const next = applyImageSelection(
-          await discoverModels(request.signal),
+          await discoverModels(cancellation),
           imageSet(current()),
         )
         return next.map(model => ({

@@ -4,10 +4,17 @@
  * presentation stays consistent across the plugin family.
  */
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+// DSH 0.1.2 deleted `@deepseek-ai/dsh-client-runtime` (its services moved to
+// focused packages), so `ClientContext` is now cordis' own `Context` plus the
+// service augmentations below: `slots` comes from `dsh-client-ui-renderer`,
+// `settingsScope` from `dsh-client-ui-settings`, `locale` from
+// `dsh-client-locale`. All type-only; the bundle requires none of them.
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { TraeUsageCard } from './TraeUsageCard.tsx'
 import type { TraeUsageCardInjected } from './TraeUsageCard.tsx'
 import { en, zh } from './locales.ts'
