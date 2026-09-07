@@ -389,7 +389,7 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                                   <span className="dsm-trae-model-name">
                                     {model.name}
                                     {model.creditMultiplier === undefined ? null
-                                      : <span className="dsm-trae-model-name-rate">({model.creditMultiplier.toFixed(2)}x)</span>}
+                                      : <span className="dsm-trae-model-name-rate">· x{model.creditMultiplier.toFixed(2)}</span>}
                                   </span>
                                 </span>
                               </label>

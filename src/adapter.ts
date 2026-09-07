@@ -5,7 +5,7 @@ import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import { traeInputModalities, type TraeCatalog, type TraeModelInfo } from './catalog.ts'
+import { traeInputModalities, traeModelDisplayName, type TraeCatalog, type TraeModelInfo } from './catalog.ts'
 import type { TraeShim } from './shim.ts'
 
 export const TRAE_PROVIDER = 'trae'
@@ -33,7 +33,7 @@ const REQUEST_IMAGE_BUDGETS = {
 function toPiModel(info: TraeModelInfo, baseUrl: string): Model<Api> {
   return {
     id: info.id,
-    name: info.name,
+    name: traeModelDisplayName(info),
     api: 'openai-completions',
     provider: TRAE_PROVIDER,
     baseUrl,

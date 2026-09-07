@@ -52,4 +52,27 @@ describe('Trae provider registration', () => {
     expect(models.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text', 'image'])
     expect(models.find(model => model.id === 'DeepSeek-V4-Flash')?.inputModalities).toEqual(['text'])
   })
+
+  it('embeds the saved credit multiplier into the registered model name', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    await ctx.plugin(Trae, { edition: 'auto' })
+    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
+
+    // Saving the directory persists the multiplier; the adapter then exposes
+    // the DSH-facing name `Name · x<rate>` while the model id stays pure.
+    await ctx.settings.update(Trae.TRAE_SETTINGS_NS, {
+      lastCatalog: [
+        { id: 'glm-5.2', name: 'GLM-5.2', input: ['text'], creditMultiplier: 0.79 },
+        { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', input: ['text'] },
+      ],
+      enabledModelIds: ['glm-5.2'],
+    })
+
+    const models = await ctx.llm.listModels('trae')
+    const glm = models.find(model => model.id === 'glm-5.2')
+    expect(glm?.name).toBe('GLM-5.2 · x0.79')
+  })
 })

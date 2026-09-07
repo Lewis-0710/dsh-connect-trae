@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- 模型名称内嵌积分倍率，与 Trae 自身模型菜单的显示格式一致（如 `GLM-5.2 · x0.79`）：DSH 模型选择器中由本插件注册的模型名在 Trae 公布 `consumption_rate` 时带上 `· x倍率` 后缀，倍率随目录刷新更新，未公布倍率的模型保持原名；模型 id 与内部目录仍用原始名称（不影响 wire 解析与已保存的选择）。插件设置卡片模型行的倍率同步改为 `· x0.79` 内联显示；`lastCatalog` 设置模式新增 `creditMultiplier` 字段声明，保证倍率跨重启持久化。
+
 ## 1.2.0 (2026-09-04)
 
 ### Changes
