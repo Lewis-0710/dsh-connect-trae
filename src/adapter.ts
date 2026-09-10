@@ -96,6 +96,15 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
     streamIdleTimeoutMs: TRAE_STREAM_IDLE_TIMEOUT_MS,
     retryPolicy: resolveRetryPolicy(undefined, 'dsh-connect-trae retryPolicy'),
     configuredMaxTokens: new Map(),
+    // DSH 0.1.5 made `modelErrors` a required field on this profile: the
+    // adapter now consults it per model before a request and fails the call
+    // with `INVALID_CONFIG` when the id is present. This plugin builds its
+    // provider by hand from a live Trae catalog, so the kernel's own
+    // catalog-resolution step (which populates this map) never runs for it;
+    // an empty map states the correct fact — every served model is
+    // serviceable. `piProvider` also became optional in 0.1.5, which this
+    // hand-built profile still satisfies by always supplying it.
+    modelErrors: new Map(),
     ...REQUEST_IMAGE_BUDGETS,
     piProvider: provider,
   }

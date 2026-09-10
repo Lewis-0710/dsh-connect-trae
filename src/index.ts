@@ -122,11 +122,16 @@ export function apply(ctx: Context, config: Config): void {
   // `Doubao-Seed-Code` / `glm-5.3`) and must never be served — even from a stale
   // saved `lastCatalog` / `models` / `enabledModelIds` that still lists it.
   const callableKeys = new Set<string>()
+  // Whether discovery has actually produced a directory this run. Only a
+  // completed merge may filter anything: an empty `callableKeys` means "no wire
+  // answer yet" (no credentials, startup discovery failed or still in flight)
+  // and must not be read as "nothing is callable".
+  let wireResolved = false
   // Drop dead rows from a (possibly stale) saved directory. No-op when the wire
-  // map has not been resolved yet (startup discovery failed or is in flight),
-  // so a transient network failure never hides the whole catalog.
+  // map has not been resolved yet, so a transient network failure never hides
+  // the whole catalog.
   const dropDeadModels = (rows: readonly TraeModelInfo[]): readonly TraeModelInfo[] => {
-    if (callableKeys.size === 0) return rows
+    if (!wireResolved) return rows
     return rows.filter(model =>
       callableKeys.has(model.id.trim().toLowerCase()) || callableKeys.has(model.name.trim().toLowerCase()))
   }
@@ -136,21 +141,28 @@ export function apply(ctx: Context, config: Config): void {
   // Dead config_names are dropped against the live wire map, so a stale save
   // cannot resurrect `Doubao-Seed-Code` / `glm-5.3`. An empty selection serves
   // the whole directory, so a never-configured plugin still exposes models.
+  // Built-in last resort. It is this plugin's own static list, never a row
+  // Remote advertised, so it must NOT be run through `dropDeadModels`: the
+  // live wire map can only ever confirm the ids it happens to know, and
+  // filtering against it would let a partial catalog delete the safety net
+  // precisely when it is needed. Its ids are the well-known Trae model names.
+  const fallbackModels = (value: Config): readonly TraeModelInfo[] =>
+    applyImageSelection(FALLBACK_TRAE_MODELS, imageSet(value))
   const derive = (value: Config, raw: readonly TraeModelInfo[]): readonly TraeModelInfo[] => {
     const selectedImages = imageSet(value)
     const derived = deriveCatalog(applyImageSelection(sanitizeCatalog(dropDeadModels(raw)), selectedImages), enabledSet(value), value.contextBudgets ?? {})
-    return derived.length > 0 ? derived : applyImageSelection(dropDeadModels(FALLBACK_TRAE_MODELS), selectedImages)
+    return derived.length > 0 ? derived : fallbackModels(value)
   }
   const configuredModels = (value: Config): readonly TraeModelInfo[] =>
     value.lastCatalog?.length ? derive(value, value.lastCatalog)
       : value.models?.length ? derive(value, value.models)
-        : applyImageSelection(dropDeadModels(FALLBACK_TRAE_MODELS), imageSet(value))
+        : fallbackModels(value)
   // What the plugin card displays: the last-refreshed raw directory, so the
   // user re-reads the current Trae catalog rather than a stale saved snapshot.
   const displayModels = (value: Config): readonly TraeModelInfo[] =>
     value.lastCatalog?.length ? dropDeadModels(sanitizeCatalog(value.lastCatalog))
       : value.models?.length ? dropDeadModels(sanitizeCatalog(value.models))
-        : dropDeadModels(FALLBACK_TRAE_MODELS)
+        : FALLBACK_TRAE_MODELS
   const store = new TraeCredentialStore({
     ...config.authFile === undefined ? {} : { storagePath: config.authFile },
     edition: config.edition ?? 'auto',
@@ -250,6 +262,12 @@ export function apply(ctx: Context, config: Config): void {
       callableKeys.add(model.id.trim().toLowerCase())
       callableKeys.add(model.name.trim().toLowerCase())
     }
+    // Mark the wire map authoritative only once a merge produced rows. A live
+    // Trae account that reports only part of the catalog (or an edition whose
+    // `/models` list is a subset) would otherwise let this filter delete every
+    // model it did not mention — including the built-in fallback set, which
+    // Remote never advertised and so can never appear in `callableKeys`.
+    wireResolved = merged.length > 0
     // Populate the startup wire resolver (display id and display name → wire
     // config_name) so the chat bridge resolves the real config_name even when
     // the persisted catalog lacks `wireConfigName` (the settings schema drops

@@ -76,3 +76,24 @@ describe('Trae provider registration', () => {
     expect(glm?.name).toBe('GLM-5.2 · x0.79')
   })
 })
+
+describe('built-in fallback is a safety net, not a filter target', () => {
+  it('serves every built-in fallback model when discovery yields nothing', async () => {
+    // A machine with no Trae credentials (or a startup discovery failure) must
+    // still expose the plugin's own fallback catalog. Regression guard: the
+    // fallback list used to be run through the live-wire filter, so a *partial*
+    // live catalog (a subset of ids) deleted every fallback model it did not
+    // mention, leaving the plugin serving almost nothing on real installs.
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    await ctx.plugin(Trae, { edition: 'auto' })
+    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
+
+    const ids = (await ctx.llm.listModels('trae')).map(model => model.id)
+    for (const fallback of ['auto', 'DeepSeek-V4-Flash', 'DeepSeek-V4-Pro', 'glm-5.2', 'kimi-k2.6']) {
+      expect(ids).toContain(fallback)
+    }
+  })
+})
