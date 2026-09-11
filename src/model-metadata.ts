@@ -14,6 +14,7 @@ export interface TraeDiscoveredModel {
   id: string
   name: string
   multimodal: boolean
+  requiresMembership?: boolean
   contextWindow?: number
   maxContextWindow?: number
   creditMultiplier?: number
@@ -65,6 +66,14 @@ export function parseTraeRemoteModel(value: unknown): TraeDiscoveredModel | unde
   const creditMultiplier = consumption?.['enable'] === true ? finitePositive(consumptionData?.['rate']) : undefined
   const reasoningFeature = record(features?.['reasoning'])
   const reasoningSupported = reasoningFeature?.['enable'] === true
+  const multimodalFeature = record(features?.['multimodal'])
+  const multimodal = raw.multimodal === true || multimodalFeature?.['enable'] === true
+  const access = record(features?.['access'])
+  const accessData = record(access?.['data'])
+  const identityList = Array.isArray(accessData?.['identity_list']) ? accessData['identity_list'] : undefined
+  const requiresMembership = (identityList !== undefined && !identityList.includes(0))
+    || raw.name === 'Doubao-Seed-Evolving'
+    || raw.display_name === 'Seed-Evolving'
   const reasoningConfig = record(raw.reasoning_effort_config)
   const rawOptions = Array.isArray(reasoningConfig?.['options']) ? reasoningConfig['options'] : []
   const supported = rawOptions.flatMap(option => {
@@ -78,7 +87,8 @@ export function parseTraeRemoteModel(value: unknown): TraeDiscoveredModel | unde
   return {
     id: raw.name,
     name: typeof raw.display_name === 'string' && raw.display_name !== '' ? raw.display_name : raw.name,
-    multimodal: raw.multimodal === true,
+    multimodal,
+    ...requiresMembership ? { requiresMembership: true } : {},
     ...dev === undefined ? {} : { contextWindow: dev },
     ...max === undefined ? {} : { maxContextWindow: max },
     ...creditMultiplier === undefined ? {} : { creditMultiplier },

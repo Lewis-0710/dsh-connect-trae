@@ -5,7 +5,7 @@
  */
 
 export const en = {
-  'row.title': 'Trae credits & models (dsh-connect-trae)',
+  'row.title': 'TraeWork',
   'row.desc': 'Use the models in the Trae desktop app directly in DSH, and see your remaining credits at a glance.',
   'row.expand': 'Expand',
   'row.collapse': 'Collapse',
@@ -44,6 +44,7 @@ export const en = {
   'row.modelsSummary': '{count} enabled',
   'row.modelsRefresh': 'Refresh from Trae',
   'row.modelsRefreshing': 'Refreshing models…',
+  'row.modelsResetDefaults': 'Reset to defaults',
   'row.modelEnabled': 'Enabled',
   'row.discard': 'Discard changes',
   'row.save': 'Save',
@@ -53,6 +54,7 @@ export const en = {
   'row.modelOutput': 'Output {output}',
   'row.modelImage': 'Image',
   'row.modelRate': '{rate}x credits',
+  'row.modelRequiresMembership': 'Subscription Plan',
   'row.modelReasoning': 'Reasoning: {efforts}',
   'row.modelReasoningSupported': 'Reasoning: supported',
   'row.modelUnknown': 'Unknown',
@@ -63,7 +65,7 @@ export const en = {
 export type TraeSettingsKey = keyof typeof en
 
 export const zh: Record<TraeSettingsKey, string> = {
-  'row.title': '接入使用Trae积分与模型（dsh-connect-trae）',
+  'row.title': 'TraeWork',
   'row.desc': '在 DSH 中直接使用 Trae 桌面 App 包含的模型，并随时查看剩余积分。',
   'row.expand': '展开',
   'row.collapse': '收起',
@@ -102,6 +104,7 @@ export const zh: Record<TraeSettingsKey, string> = {
   'row.modelsSummary': '已启用 {count} 个',
   'row.modelsRefresh': '从 Trae 刷新',
   'row.modelsRefreshing': '正在刷新模型…',
+  'row.modelsResetDefaults': '恢复默认',
   'row.modelEnabled': '启用模型',
   'row.discard': '放弃修改',
   'row.save': '保存',
@@ -111,6 +114,7 @@ export const zh: Record<TraeSettingsKey, string> = {
   'row.modelOutput': '最大输出 {output}',
   'row.modelImage': '图片',
   'row.modelRate': '积分 {rate}x',
+  'row.modelRequiresMembership': '会员计划',
   'row.modelReasoning': '推理强度：{efforts}',
   'row.modelReasoningSupported': '推理：支持',
   'row.modelUnknown': '未知',

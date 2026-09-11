@@ -36,4 +36,23 @@ describe('Trae remote model metadata', () => {
       id: 'm', name: 'm', multimodal: false, reasoningSupported: false,
     })
   })
+
+  it('parses requiresMembership when identity_list excludes free identity 0', () => {
+    expect(parseTraeRemoteModel({
+      name: 'Doubao-Seed-Evolving',
+      display_name: 'Seed-Evolving',
+      features: JSON.stringify({ access: { data: { identity_list: [1, 2, 3, 100] } } }),
+    })).toEqual(expect.objectContaining({
+      id: 'Doubao-Seed-Evolving',
+      requiresMembership: true,
+    }))
+
+    const normal = parseTraeRemoteModel({
+      name: 'glm-5.2',
+      display_name: 'GLM-5.2',
+      features: JSON.stringify({ access: { data: { identity_list: [0, 5, 1, 2, 3, 100] } } }),
+    })
+    expect(normal).toEqual(expect.objectContaining({ id: 'glm-5.2' }))
+    expect(normal?.requiresMembership).toBeUndefined()
+  })
 })

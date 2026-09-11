@@ -6,7 +6,7 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
 import { TraeCredentialStore } from './auth.ts'
-import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeModelInfo } from './catalog.ts'
+import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, formatTraeModelDisplayName, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential } from './refresh.ts'
 import { pickTraeStorageIdentity, readTraeIdentity } from './identity.ts'
 import { traeStorageCandidates } from './paths.ts'
@@ -24,7 +24,7 @@ import { registerTraeUsageRoute } from './web-status.ts'
 
 export { createTraeAdapter, TRAE_PROVIDER, TRAE_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 export { normalizeTraeCredential, traeOwnAuthPath, TraeCredentialStore, type TraeCredential } from './auth.ts'
-export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
+export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, formatTraeModelDisplayName, isMembershipModel, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
 export { decryptTraeStorageValue, parseTraeAuthValue, parseTraeStorageDocument } from './decrypt.ts'
 export { identityHeaders, pickTraeStorageIdentity, readTraeIdentity, type TraeIdentity } from './identity.ts'
 export { parseObservedModelConfig, type TraeObservedModelConfig } from './model-config.ts'
@@ -95,9 +95,11 @@ const modelConfig = z.object({
   contextWindow: z.number().step(1).min(1),
   maxTokens: z.number().step(1).min(1),
   input: z.array(z.union(['text', 'image'])),
-  // Declared so the multiplier survives future hosts whose settings schema
-  // might strip unknown fields; it feeds the DSH-facing display name.
   creditMultiplier: z.number(),
+  maxContextWindow: z.number().step(1).min(1),
+  requiresMembership: z.boolean(),
+  reasoningSupported: z.boolean(),
+  wireConfigName: z.string(),
 })
 
 export const Config: z<Config> = z.object({
@@ -366,7 +368,7 @@ export function apply(ctx: Context, config: Config): void {
         )
         return next.map(model => ({
           id: model.id,
-          name: traeModelDisplayName(model),
+          name: formatTraeModelDisplayName(model),
           ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
           ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
           // Current dsh-llm discovery types do not yet declare this field, but
@@ -377,7 +379,7 @@ export function apply(ctx: Context, config: Config): void {
       })
       releaseDirectory = ctx.llm.registerConfigurableProviders([{
         provider: TRAE_PROVIDER,
-        displayName: 'Trae',
+        displayName: 'TraeWork',
         settingsNs: TRAE_SETTINGS_NS,
         settingsPath: [],
         declared: false,

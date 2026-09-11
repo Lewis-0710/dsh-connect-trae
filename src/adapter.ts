@@ -5,7 +5,7 @@ import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import { traeInputModalities, traeModelDisplayName, type TraeCatalog, type TraeModelInfo } from './catalog.ts'
+import { formatTraeModelDisplayName, traeInputModalities, type TraeCatalog, type TraeModelInfo } from './catalog.ts'
 import type { TraeShim } from './shim.ts'
 
 export const TRAE_PROVIDER = 'trae'
@@ -31,9 +31,10 @@ const REQUEST_IMAGE_BUDGETS = {
 } as const
 
 function toPiModel(info: TraeModelInfo, baseUrl: string): Model<Api> {
+  const displayName = formatTraeModelDisplayName(info)
   return {
     id: info.id,
-    name: traeModelDisplayName(info),
+    name: displayName,
     api: 'openai-completions',
     provider: TRAE_PROVIDER,
     baseUrl,
@@ -74,7 +75,7 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
 
   const base = createProvider({
     id: TRAE_PROVIDER,
-    name: 'Trae',
+    name: 'TraeWork',
     auth: {
       apiKey: {
         name: 'Trae loopback secret',
@@ -92,7 +93,7 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
   const provider: Provider = { ...base, getModels: () => buildModels() }
   const profile: ResolvedPiAiProviderProfile = {
     provider: TRAE_PROVIDER,
-    displayName: 'Trae',
+    displayName: 'TraeWork',
     streamIdleTimeoutMs: TRAE_STREAM_IDLE_TIMEOUT_MS,
     retryPolicy: resolveRetryPolicy(undefined, 'dsh-connect-trae retryPolicy'),
     configuredMaxTokens: new Map(),

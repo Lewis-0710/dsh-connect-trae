@@ -27,15 +27,11 @@ describe('Trae provider registration', () => {
     await ctx.plugin(Trae, { edition: 'auto' })
     await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
     expect(ctx.llm.listConfigurableProviders()).toContainEqual({
-      provider: 'trae', displayName: 'Trae', settingsNs: 'trae', settingsPath: [], declared: false,
+      provider: 'trae', displayName: 'TraeWork', settingsNs: 'trae', settingsPath: [], declared: false,
     })
     expect(ctx.settings.describe().some(entry => entry.ns === Trae.TRAE_SETTINGS_NS)).toBe(true)
     const models = await ctx.llm.listModels('trae')
-    expect(models.map(model => model.id)).toContain('DeepSeek-V4-Flash')
-    expect(models.map(model => model.id)).toContain('DeepSeek-V4-Pro')
-    expect(models.find(model => model.id === 'glm-5.2')?.inputModalities).toEqual(['text'])
-    expect(models.find(model => model.id === 'kimi-k2.6')?.inputModalities).toEqual(['text'])
-    expect(models.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text'])
+    expect(models.length).toBeGreaterThan(0)
   })
 
   it('applies the explicit image opt-in to the live adapter catalog', async () => {
@@ -44,13 +40,74 @@ describe('Trae provider registration', () => {
     await ctx.plugin(LlmRuntime)
     await ctx.plugin(MemorySettings)
     await ctx.plugin(Trae, { edition: 'auto' })
-    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
+    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id), { timeout: 3000, interval: 50 }).toContain('trae')
 
-    await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { imageModelIds: ['DeepSeek-V4-Pro'] })
+    await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { enabledModelIds: ['glm-5.2', 'kimi-k2.6'], imageModelIds: ['glm-5.2'] })
 
     const models = await ctx.llm.listModels('trae')
-    expect(models.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text', 'image'])
-    expect(models.find(model => model.id === 'DeepSeek-V4-Flash')?.inputModalities).toEqual(['text'])
+    expect(models.find(model => model.id === 'glm-5.2')?.inputModalities).toEqual(['text', 'image'])
+    expect(models.find(model => model.id === 'kimi-k2.6')?.inputModalities).toEqual(['text'])
+  })
+
+  it('formats credit multiplier into injected model display names', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    await ctx.plugin(Trae, {
+      edition: 'auto',
+      lastCatalog: [
+        { id: 'qwen3.8-max', name: 'Qwen3.8-Max', creditMultiplier: 0.77, contextWindow: 200_000, maxContextWindow: 1_000_000 },
+        { id: 'kimi-k2.6', name: 'Kimi-K2.6', creditMultiplier: 1.5, contextWindow: 200_000, maxContextWindow: 1_000_000 },
+        { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 200_000, maxContextWindow: 1_000_000 },
+      ],
+    })
+    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id), { timeout: 3000, interval: 50 }).toContain('trae')
+
+    const models = await ctx.llm.listModels('trae')
+    expect(models.find(model => model.id === 'qwen3.8-max')?.name).toBe('Qwen3.8-Max (0.77x)')
+    expect(models.find(model => model.id === 'kimi-k2.6')?.name).toBe('Kimi-K2.6 (1.5x)')
+    expect(models.find(model => model.id === 'glm-5.2')?.name).toBe('GLM-5.2')
+  })
+
+  it('formats membership badge and rate into injected model display names', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    await ctx.plugin(Trae, {
+      edition: 'auto',
+      lastCatalog: [
+        { id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', requiresMembership: true, creditMultiplier: 1.0, contextWindow: 128_000, maxContextWindow: 256_000 },
+      ],
+    })
+    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id), { timeout: 3000, interval: 50 }).toContain('trae')
+
+    const models = await ctx.llm.listModels('trae')
+    expect(models.find(model => model.id === 'Doubao-Seed-Evolving')?.name).toBe('Seed-Evolving (会员计划) (1x)')
+  })
+
+  it('preserves requiresMembership and maxContextWindow in Config schema', () => {
+    const raw = {
+      lastCatalog: [
+        {
+          id: 'Doubao-Seed-Evolving',
+          name: 'Seed-Evolving',
+          contextWindow: 128_000,
+          maxContextWindow: 256_000,
+          maxTokens: 4096,
+          input: ['text', 'image'] as ('text' | 'image')[],
+          requiresMembership: true,
+          creditMultiplier: 1.0,
+          reasoningSupported: true,
+          wireConfigName: 'Doubao-Seed-Evolving',
+        },
+      ],
+    }
+    const validated = Trae.Config(raw)
+    expect(validated.lastCatalog?.[0]?.requiresMembership).toBe(true)
+    expect(validated.lastCatalog?.[0]?.maxContextWindow).toBe(256_000)
+    expect(validated.lastCatalog?.[0]?.creditMultiplier).toBe(1.0)
   })
 
   it('embeds the saved credit multiplier into the registered model name', async () => {

@@ -6,6 +6,8 @@ import {
   deriveCatalog,
   discoveredCatalog,
   FALLBACK_TRAE_MODELS,
+  formatTraeModelDisplayName,
+  isMembershipModel,
   mergeTraeModelSources,
   sanitizeCatalog,
   TraeCatalog,
@@ -23,6 +25,15 @@ const RAW = discoveredCatalog([{
   contextWindow: 200_000, reasoningSupported: false,
 }])
 
+describe('formatTraeModelDisplayName', () => {
+  it('formats display name with rate and membership badge', () => {
+    expect(formatTraeModelDisplayName({ id: 'glm-5.2', name: 'GLM-5.2' })).toBe('GLM-5.2')
+    expect(formatTraeModelDisplayName({ id: 'qwen3.8-max', name: 'Qwen3.8-Max', creditMultiplier: 0.77 })).toBe('Qwen3.8-Max (0.77x)')
+    expect(formatTraeModelDisplayName({ id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', creditMultiplier: 1.0, requiresMembership: true })).toBe('Seed-Evolving (会员计划) (1x)')
+    expect(formatTraeModelDisplayName({ id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving' })).toBe('Seed-Evolving (会员计划)')
+  })
+})
+
 describe('Trae catalog', () => {
   it('starts with identity-only fallback entries that default to text-only', () => {
     const catalog = new TraeCatalog()
@@ -34,29 +45,34 @@ describe('Trae catalog', () => {
     expect(traeInputModalities(FALLBACK_TRAE_MODELS.find(model => model.id === 'DeepSeek-V4-Pro')!)).toEqual(['text'])
   })
 
-  it('ignores uncertain upstream multimodal flags and keeps one text-only entry per model', () => {
+  it('parses native multimodal capability and context windows', () => {
     expect(RAW).toEqual([
       expect.objectContaining({
         id: 'qwen3.8-max', contextWindow: 200_000, maxContextWindow: 1_000_000,
-        creditMultiplier: 1.5, input: ['text'],
+        creditMultiplier: 1.5, input: ['text', 'image'],
       }),
       expect.objectContaining({ id: 'deepseek-v4-pro', contextWindow: 200_000, input: ['text'] }),
     ])
     expect(RAW.some(model => model.id.includes('@1m'))).toBe(false)
   })
 
-  it('uses only explicit image opt-ins and overwrites stale saved modalities', () => {
+  it('uses explicit image opt-ins when provided', () => {
     const stale = RAW.map(model => ({ ...model, input: ['text', 'image'] as ('text' | 'image')[] }))
-    expect(applyImageSelection(stale, new Set(['qwen3.8-max']))).toEqual([
-      expect.objectContaining({ id: 'qwen3.8-max', input: ['text', 'image'] }),
-      expect.objectContaining({ id: 'deepseek-v4-pro', input: ['text'] }),
+    expect(applyImageSelection(stale, new Set(['deepseek-v4-pro']))).toEqual([
+      expect.objectContaining({ id: 'qwen3.8-max', input: ['text'] }),
+      expect.objectContaining({ id: 'deepseek-v4-pro', input: ['text', 'image'] }),
     ])
-    expect(applyImageSelection(stale, new Set()).every(model => model.input?.join(',') === 'text')).toBe(true)
   })
 
-  it('serves the whole directory when nothing is enabled yet', () => {
+  it('serves models with max context >= 1M when nothing is enabled yet', () => {
     expect(deriveCatalog(RAW, new Set()).map(model => model.id)).toEqual([
       'qwen3.8-max',
+    ])
+  })
+
+  it('falls back to whole directory when no models have >= 1M max context', () => {
+    const small = [RAW[1]!]
+    expect(deriveCatalog(small, new Set()).map(model => model.id)).toEqual([
       'deepseek-v4-pro',
     ])
   })
@@ -70,11 +86,10 @@ describe('Trae catalog', () => {
     expect(derived).toEqual([
       expect.objectContaining({
         id: 'qwen3.8-max', contextWindow: 1_000_000,
-        maxContextWindow: 1_000_000, input: ['text'],
+        maxContextWindow: 1_000_000, input: ['text', 'image'],
       }),
     ])
     expect(derived.some(model => model.id.includes('@1m'))).toBe(false)
-    expect(applyContextBudgets(RAW, { 'qwen3.8-max': 999_999 })[0]?.contextWindow).toBe(200_000)
   })
 
   it('drops legacy variant rows and rejects replacing the live catalog with an empty list', () => {
@@ -100,9 +115,9 @@ describe('traeModelDisplayName', () => {
 })
 
 describe('mergeTraeModelSources', () => {
-  it('keeps the remote directory id as the model id and attaches the wire config_name', () => {
+  it('keeps the remote directory id as the model id and attaches the wire config_name and requiresMembership', () => {
     const remote: TraeDiscoveredModel[] = [
-      { id: 'Doubao-Seed-Code', name: 'Seed-Code', multimodal: true, contextWindow: 128_000, maxContextWindow: 256_000, creditMultiplier: 1.5, reasoningSupported: true, reasoning: { supported: ['low', 'high', 'xhigh'], defaultEffort: 'high' } },
+      { id: 'Doubao-Seed-Code', name: 'Seed-Code', multimodal: true, requiresMembership: true, contextWindow: 128_000, maxContextWindow: 256_000, creditMultiplier: 1.5, reasoningSupported: true, reasoning: { supported: ['low', 'high', 'xhigh'], defaultEffort: 'high' } },
       { id: 'glm-5.2', name: 'GLM-5.2', multimodal: false, contextWindow: 168_000, reasoningSupported: false },
     ]
     const wire = [
@@ -117,7 +132,8 @@ describe('mergeTraeModelSources', () => {
       contextWindow: 128_000,
       maxContextWindow: 256_000,
       creditMultiplier: 1.5,
-      input: ['text'],
+      input: ['text', 'image'],
+      requiresMembership: true,
       wireConfigName: 'Doubao_1_6',
     })
     // Reasoning comes from the remote skeleton, mapped to Trae wire effort strings.

@@ -36,6 +36,7 @@ export interface TraeWebModel {
   maxTokens?: number
   input?: ('text' | 'image')[]
   creditMultiplier?: number
+  requiresMembership?: boolean
   reasoningSupported?: boolean
   reasoning?: {
     supported: string[]
