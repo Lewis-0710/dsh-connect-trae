@@ -130,7 +130,7 @@ describe('Trae provider registration', () => {
 
     const models = await ctx.llm.listModels('trae')
     const glm = models.find(model => model.id === 'glm-5.2')
-    expect(glm?.name).toBe('GLM-5.2 · x0.79')
+    expect(glm?.name).toBe('GLM-5.2 (0.79x)')
   })
 })
 
