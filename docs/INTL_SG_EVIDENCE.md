@@ -121,6 +121,19 @@ TRAE SOLO 国际版 2026-09-15 日志记录了官方 App 自己的刷新调用�
 - SG 条目 `features.reasoning.enable=true` 但 `reasoning_effort_config.options` 未映射出 light/high/extra_high 档位（解析为 `reasoningSupported: true` 无 levels）——推理档位形态与 CN 存在差异，实现时按「无档位则不传 reasoning_effort」处理。
 - 国际版 remote 目录的 `features`（JSON 字符串）中未见 `consumption_rate`（SG 无积分倍率概念，订阅制）。
 
+### 2.5 目录 function 的区域差异（2026-09-15 实测，等级 A+）
+
+`get_detail_param` 的 `function` 决定返回哪个 agent 的 config 集合，国际网关按 region 分派：
+
+| function | 国际网关返回 | 覆盖 remote 阵容 |
+|---|---|---|
+| `solo_work_lite`（CN 版所用） | 14 条（gpt-5.4/5.2/5.5 + custom_model_*×10） | 仅 3/7（缺 gemini-3-flash-solo、minimax-m3/m2.7、kimi-k2.5 的 wire 映射） |
+| `solo_agent` | 39 条（含全部 remote 阵容 + paygo 变体 + search_agent 等内部模型） | 7/7 |
+| `solo_agent_lite` | 31 条 | 部分 |
+| `solo_work` | 0 条 | — |
+
+因此插件的**目录查询**在 ai region 改用 `solo_agent`（remote 目录仍是合并骨架，agent 内部模型与 paygo 变体不会浮出）；**聊天** function 两侧统一 `solo_work_lite`（国际网关端到端实测 200）。
+
 ## 4. SG Pay/Usage（订阅制，数据源与 CN 不同）
 
 CN 版 `web_user_ent_usage`（积分包明细）在 SG 日志中**未出现**；SG 实测可用的是：

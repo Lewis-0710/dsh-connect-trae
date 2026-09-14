@@ -163,3 +163,41 @@ describe('region-scoped gateways', () => {
     expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://diagnostic.example/api/agent/v3/llm_utils_chat')
   })
 })
+
+describe('region-scoped model directory function', () => {
+  const intlCredential: TraeCredential = {
+    accessToken: 'at', userId: 'uid', host: 'https://growsg-normal.trae.ai', userRegion: 'SG',
+    expiresAtMs: Date.now() + 1000, edition: 'solo-sg', source: 'desktop',
+  }
+
+  it('asks the ai gateway for the solo_agent directory', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => new Response(JSON.stringify({ config_info_list: [
+      { config_name: 'minimax-m3', display_config: { display_name: 'MiniMax-M3' }, model_detail_list: [{ prompt_max_tokens: 200000, max_tokens: 32000 }] },
+    ] }), { status: 200 }))
+    const client = new TraeSoloUpstreamClient({
+      credential: async () => intlCredential,
+      identity: async () => identity,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+    await client.fetchModels()
+    const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string)
+    // The ai directory must come from solo_agent: solo_work_lite omits four of
+    // the seven remote-roster models on the international gateway.
+    expect(body['function']).toBe('solo_agent')
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://coresg-normal.trae.ai/api/ide/v1/get_detail_param')
+  })
+
+  it('keeps the CN directory on solo_work_lite', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ config_info_list: [
+      { config_name: 'glm-5.2', display_config: { display_name: 'GLM-5.2' }, model_detail_list: [{ prompt_max_tokens: 116000, max_tokens: 32000 }] },
+    ] }), { status: 200 }))
+    const client = new TraeSoloUpstreamClient({
+      credential: async () => credential,
+      identity: async () => identity,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+    await client.fetchModels()
+    const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string)
+    expect(body['function']).toBe('solo_work_lite')
+  })
+})
