@@ -70,7 +70,7 @@ describe('Trae persisted identity', () => {
     expect(value.platform).toBe('linux')
   })
 
-  it('skips product.json for sg and solo-sg editions on win32', async () => {
+  it('resolves product.json for international editions too on win32', async () => {
     const root = await mkdtemp(join(tmpdir(), 'trae-sg-')); cleanup.push(root)
     const storage = join(root, 'User', 'globalStorage', 'storage.json')
     await mkdir(join(root, 'User', 'globalStorage'), { recursive: true })
@@ -78,11 +78,14 @@ describe('Trae persisted identity', () => {
     const productDir = join(root, 'local', 'Programs', 'Trae', 'resources', 'app')
     await mkdir(productDir, { recursive: true })
     await writeFile(join(productDir, 'product.json'), JSON.stringify({ appVersion: '9.9.9' }))
-    for (const edition of ['sg', 'solo-sg'] as const) {
-      const value = await readTraeIdentity({ edition, path: storage, source: 'desktop' }, { platform: 'win32', home: root, env: { LOCALAPPDATA: join(root, 'local') } })
-      expect(value.appVersion).toBeUndefined()
-      expect(value.platform).toBe('win32')
-    }
+    // The international desktop install's product.json is now read (it feeds
+    // x-app-version on the SG gateway); an edition whose install dir has no
+    // product.json still degrades to an absent appVersion.
+    const sg = await readTraeIdentity({ edition: 'sg', path: storage, source: 'desktop' }, { platform: 'win32', home: root, env: { LOCALAPPDATA: join(root, 'local') } })
+    expect(sg.appVersion).toBe('9.9.9')
+    expect(sg.platform).toBe('win32')
+    const soloSg = await readTraeIdentity({ edition: 'solo-sg', path: storage, source: 'desktop' }, { platform: 'win32', home: root, env: { LOCALAPPDATA: join(root, 'local') } })
+    expect(soloSg.appVersion).toBeUndefined()
   })
 
   it('picks the first present candidate, skipping missing editions (Windows SOLO-only machine)', async () => {

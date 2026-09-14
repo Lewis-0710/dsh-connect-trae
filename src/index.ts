@@ -7,9 +7,10 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
 import { TraeCredentialStore } from './auth.ts'
 import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeModelInfo } from './catalog.ts'
-import { refreshTraeCredential } from './refresh.ts'
+import { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
 import { pickTraeStorageIdentity, readTraeIdentity } from './identity.ts'
-import { traeStorageCandidates } from './paths.ts'
+import { traeStorageCandidates, type TraeEdition } from './paths.ts'
+import { regionOfCredential, regionOfEdition, regionOfHost, regionOfUserRegion, REGION_GATEWAYS, type TraeRegion, type TraeRegionGateways } from './region.ts'
 import { createTraeShim } from './shim.ts'
 import { TraeSoloUpstreamClient } from './solo.ts'
 import { TraeSoloBridge } from './solo-bridge.ts'
@@ -24,6 +25,15 @@ import { registerTraeUsageRoute } from './web-status.ts'
 
 export { createTraeAdapter, TRAE_PROVIDER, TRAE_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
 export { normalizeTraeCredential, traeOwnAuthPath, TraeCredentialStore, type TraeCredential } from './auth.ts'
+export {
+  regionOfCredential,
+  regionOfEdition,
+  regionOfHost,
+  regionOfUserRegion,
+  REGION_GATEWAYS,
+  type TraeRegion,
+  type TraeRegionGateways,
+} from './region.ts'
 export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
 export { decryptTraeStorageValue, parseTraeAuthValue, parseTraeStorageDocument } from './decrypt.ts'
 export { identityHeaders, pickTraeStorageIdentity, readTraeIdentity, type TraeIdentity } from './identity.ts'
@@ -48,7 +58,7 @@ export { TraeRawCapabilityController, type TraeRawCapabilityControllerOptions } 
 export { TraeFallbackUpstreamClient, type TraeFallbackUpstreamOptions } from './fallback-upstream.ts'
 export { TraeGatedUpstreamClient, type TraeGatedUpstreamOptions } from './gated-upstream.ts'
 export { applyReasoningEffort, parseReasoningCapability, TRAE_REASONING_EFFORTS, type TraeReasoningCapability, type TraeReasoningEffort } from './reasoning.ts'
-export { refreshTraeCredential } from './refresh.ts'
+export { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
 export { decodeTraeEvent, SseDecoder, type SseEvent, type TraeStreamEvent } from './sse.ts'
 export { prepareSoloBody, TraeSoloUpstreamClient, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_FUNCTION, TRAE_SOLO_MODELS_PATH, type TraeSoloClientOptions } from './solo.ts'
 export { bridgeTraeSoloStream, TraeSoloBridge } from './solo-bridge.ts'
@@ -167,16 +177,39 @@ export function apply(ctx: Context, config: Config): void {
     ...config.authFile === undefined ? {} : { storagePath: config.authFile },
     edition: config.edition ?? 'auto',
     ...config.accountId === undefined ? {} : { accountId: config.accountId },
-    refresh: credential => refreshTraeCredential(credential),
+    // The refresh callback resolves the device identity lazily so an
+    // international SOLO account refreshes with its own installation's
+    // machine/device ids (the official client sends a DeviceInfo body there).
+    refresh: async credential => refreshTraeCredential(credential, undefined, await refreshDeviceSafe()),
   })
+  /**
+   * Best-effort device identity for the SOLO-international refresh body.
+   * Resolution failures degrade to omitting DeviceInfo (its being required is
+   * unverified, docs/INTL_SG_EVIDENCE.md §5) rather than failing the refresh.
+   */
+  async function refreshDeviceSafe(): Promise<TraeRefreshDevice | undefined> {
+    try {
+      const value = await identity()
+      return { deviceId: value.deviceId, machineId: value.machineId }
+    } catch {
+      return undefined
+    }
+  }
   const identity = async () => {
-    // Pick the first CN/SOLO candidate whose storage file actually exists,
+    // Prefer the selected credential's own edition so an international
+    // account reads its own installation's identity (machine/device ids are
+    // per-install), mirroring the credential store's account binding. The
+    // explicit `edition` config still wins as the user's own narrowing.
+    let preferred: TraeEdition | undefined
+    try { preferred = (await store.current())?.edition } catch { /* fall through to every candidate */ }
+    const hint = config.edition !== undefined && config.edition !== 'auto' ? config.edition : preferred
+    // Pick the first desktop candidate whose storage file actually exists,
     // mirroring the credential store's skip-missing semantics. Windows machines
     // often install only SOLO, so pinning the first (cn) candidate and reading a
     // missing file used to throw ENOENT and break every refresh/chat request.
     const candidates = config.authFile === undefined
-      ? traeStorageCandidates().filter(item => item.source === 'desktop' && (item.edition === 'cn' || item.edition === 'solo') && (config.edition === undefined || config.edition === 'auto' || item.edition === config.edition))
-      : [{ edition: config.edition === undefined || config.edition === 'auto' ? 'solo' as const : config.edition, path: config.authFile, source: 'desktop' as const }]
+      ? traeStorageCandidates().filter(item => item.source === 'desktop' && (hint === undefined || item.edition === hint))
+      : [{ edition: hint ?? 'solo' as const, path: config.authFile, source: 'desktop' as const }]
     if (candidates.length === 0) throw new Error('Trae storage was not found')
     return pickTraeStorageIdentity(candidates)
   }

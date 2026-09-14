@@ -5,6 +5,7 @@ import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { parseTraeCliToken, parseTraeStorageDocument } from './decrypt.ts'
 import { traeStorageCandidates, type TraeCredentialSource, type TraeEdition, type TraeStorageCandidate } from './paths.ts'
+import { regionOfCredential, regionOfEdition, type TraeRegion } from './region.ts'
 
 export interface TraeCredential {
   accessToken: string
@@ -12,6 +13,12 @@ export interface TraeCredential {
   userId: string
   accountName?: string
   host: string
+  /**
+   * Region claim from the decrypted storage document (`userRegion.region`,
+   * 'CN' | 'SG', possibly lowercase). Drives the routing bucket together with
+   * `host`; see `regionOfCredential`.
+   */
+  userRegion?: string
   expiresAtMs: number
   refreshExpiresAtMs?: number
   edition: TraeEdition
@@ -39,6 +46,8 @@ export interface TraeAccountChoice {
   id: string
   accountName: string
   edition: TraeEdition
+  /** Routing bucket of this account (`cn` | `ai`), derived from its credential. */
+  region: TraeRegion
   source: 'desktop' | 'dsh' | 'cli'
   tokenExpiresAtMs: number
   selected: boolean
@@ -79,6 +88,14 @@ function timeToMs(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+/** Extract the `userRegion.region` string from either on-disk shape. */
+function userRegionOf(value: unknown): string | undefined {
+  const raw = typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)['region']
+    : value
+  return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : undefined
+}
+
 export function normalizeTraeCredential(raw: unknown, edition: TraeEdition, source: TraeCredential['source']): TraeCredential | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
   const value = raw as Record<string, unknown>
@@ -87,6 +104,7 @@ export function normalizeTraeCredential(raw: unknown, edition: TraeEdition, sour
   const expiresAtMs = timeToMs(value['expiredAt'] ?? value['expiresAt']) ?? 0
   const refreshExpiresAtMs = timeToMs(value['refreshExpiredAt'] ?? value['refreshExpiresAt'])
   const refreshToken = optionalString(value['refreshToken'])
+  const userRegion = userRegionOf(value['userRegion'])
   const account = typeof value['account'] === 'object' && value['account'] !== null && !Array.isArray(value['account'])
     ? value['account'] as Record<string, unknown>
     : undefined
@@ -97,6 +115,7 @@ export function normalizeTraeCredential(raw: unknown, edition: TraeEdition, sour
     userId: optionalString(value['userId']) ?? '',
     ...accountName === undefined ? {} : { accountName },
     host: optionalString(value['host']) ?? '',
+    ...userRegion === undefined ? {} : { userRegion },
     expiresAtMs,
     ...refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs },
     edition,
@@ -118,6 +137,7 @@ function parseOwn(text: string): TraeCredential | undefined {
     if (edition !== 'cn' && edition !== 'sg' && edition !== 'solo' && edition !== 'solo-sg') return undefined
     return normalizeTraeCredential({
       token: stored['accessToken'], refreshToken: stored['refreshToken'], userId: stored['userId'], host: stored['host'],
+      userRegion: stored['userRegion'],
       account: stored['accountName'] === undefined ? undefined : { username: stored['accountName'] },
       expiredAt: stored['expiresAtMs'], refreshExpiredAt: stored['refreshExpiresAtMs'],
     }, edition, 'dsh')
@@ -166,11 +186,16 @@ export class TraeCredentialStore {
       ]
     }
     const all = traeStorageCandidates()
-    // This connector targets the CN service and Work-credit contracts only.
-    // Ignore SG installations even when they are signed in locally.
+    // Every desktop edition is discovered (the plugin routes by the
+    // credential's own region, see region.ts); an explicit `edition` config
+    // narrows the scan. The international CLI home (`~/.trae`) stays excluded:
+    // its bare JWT carries no host claim and the SG default host has not been
+    // verified (docs/INTL_SG_EVIDENCE.md §5), so only the CN CLI home
+    // (`.trae-cn`) is probed.
+    const cliEdition: TraeEdition = 'cn'
     return this.edition === 'auto'
-      ? all.filter(candidate => candidate.edition === 'cn' || candidate.edition === 'solo')
-      : all.filter(candidate => candidate.edition === this.edition && (candidate.edition === 'cn' || candidate.edition === 'solo'))
+      ? all.filter(candidate => candidate.source === 'desktop' || candidate.edition === cliEdition)
+      : all.filter(candidate => candidate.edition === this.edition && (candidate.source === 'desktop' || candidate.edition === cliEdition))
   }
 
   /**
@@ -191,6 +216,7 @@ export class TraeCredentialStore {
       id: traeAccountId(credential),
       accountName: credential.accountName ?? (credential.userId || `${credential.edition} account`),
       edition: credential.edition,
+      region: regionOfCredential(credential),
       source: credential.source,
       tokenExpiresAtMs: credential.expiresAtMs,
       selected: selectedExists ? traeAccountId(credential) === this.accountId : credential === defaultSelected,
@@ -239,9 +265,11 @@ export class TraeCredentialStore {
   private async readAll(): Promise<TraeCredential[]> {
     const { credentials: desktop } = await this.readDesktopAll()
     const own = await this.readOwn()
-    const cnOwn = own?.edition === 'cn' || own?.edition === 'solo' ? own : undefined
-    if (cnOwn === undefined || desktop.some(credential => traeAccountId(credential) === traeAccountId(cnOwn))) return desktop
-    return [...desktop, cnOwn]
+    // The own copy is accepted for every edition: it is a refresh result the
+    // plugin itself wrote, so an international account's refreshed credential
+    // must not be dropped just because it is not a CN edition.
+    if (own === undefined || desktop.some(credential => traeAccountId(credential) === traeAccountId(own))) return desktop
+    return [...desktop, own]
   }
 
   /**
@@ -290,18 +318,22 @@ export class TraeCredentialStore {
   private credentialFrom(candidate: TraeStorageCandidate, text: string): TraeCredential {
     let credential: TraeCredential | undefined
     if (candidate.source === 'cli') {
+      // The CLI token carries no host claim and no userRegion, so the CN host
+      // is used rather than an empty string. Only the CN CLI home
+      // (`.trae-cn`) is verified: an international CLI token cannot be routed
+      // correctly yet (see docs/INTL_SG_EVIDENCE.md §5) and is rejected with
+      // a diagnosable error instead of being silently misrouted to the CN
+      // gateway.
+      if (regionOfEdition(candidate.edition) !== 'cn') {
+        throw new Error(`Trae CLI tokens are only verified for the CN region; ${candidate.edition} CLI homes are not supported yet`)
+      }
       const claims = parseTraeCliToken(text)
-      // The CLI token carries no host claim, so the CN host is used rather than
-      // an empty string, which would otherwise become an unusable base URL. Its
-      // edition is likewise CN-only: `.trae-cn` is the CN CLI home and the bare
-      // `.trae` fallback is treated as CN too, since the store already filters
-      // international installs out of the desktop path.
       credential = normalizeTraeCredential({
         token: claims.accessToken,
         userId: claims.userId,
         host: CLI_DEFAULT_HOST,
         expiredAt: claims.expiresAtMs,
-      }, candidate.edition === 'sg' ? 'cn' : candidate.edition, 'cli')
+      }, candidate.edition, 'cli')
     } else {
       credential = normalizeTraeCredential(parseTraeStorageDocument(text), candidate.edition, 'desktop')
     }

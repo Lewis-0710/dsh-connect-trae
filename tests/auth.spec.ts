@@ -14,7 +14,18 @@ function storage(token: string, expiresAt: number, refreshExpiresAt = Date.now()
   }) })
 }
 
+/** An international install's storage document: SG host plus the userRegion claim. */
+function intlStorage(token: string, expiresAt: number, userId = 'intl-user'): string {
+  return JSON.stringify({ [TRAE_AUTH_STORAGE_KEY]: JSON.stringify({
+    token, refreshToken: 'rt', userId, account: { username: userId }, host: 'https://growsg-normal.trae.ai', userRegion: { region: 'SG', _aiRegion: 'SG' }, expiredAt: new Date(expiresAt).toISOString(),
+  }) })
+}
+
 async function temp(): Promise<string> { const dir = await mkdtemp(join(tmpdir(), 'trae-auth-')); cleanup.push(dir); return dir }
+
+/** A bare three-part JWT the way `traecli` persists it. */
+const cliJwtContent = (userId: string, exp: number): string =>
+  `${Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')}.${Buffer.from(JSON.stringify({ data: { user_id: userId }, iss: 'trae', exp })).toString('base64url')}.sig`
 
 describe('Trae credential normalization', () => {
   it('normalizes ISO and numeric expiries while exposing only the display username', () => {
@@ -118,14 +129,33 @@ describe('TraeCredentialStore', () => {
     await expect(store.current()).resolves.toBeUndefined()
   })
 
-  it('auto mode includes CN editions only', () => {
+  it('auto mode discovers every desktop edition but only the CN CLI home', () => {
     const store = new TraeCredentialStore({ ownPath: '/tmp/unused-trae-own', refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
-    const editions = store.candidates().map(candidate => candidate.edition)
-    // The CLI dotfile home contributes an extra `cn` candidate, so the exact
-    // list is asserted as a set of editions rather than a fixed sequence.
-    expect(new Set(editions)).toEqual(new Set(['cn', 'solo']))
-    expect(editions).not.toContain('sg')
-    expect(editions).not.toContain('solo-sg')
+    const candidates = store.candidates()
+    const editions = candidates.map(candidate => candidate.edition)
+    // Every desktop install is discovered: the plugin routes by the
+    // credential's own region, so international editions must be scanned too.
+    expect(new Set(editions)).toEqual(new Set(['cn', 'sg', 'solo', 'solo-sg']))
+    // The international CLI home (`~/.trae`) is NOT probed: its token carries
+    // no host claim and the SG default host is unverified (INTL_SG_EVIDENCE.md §5).
+    const cliEditions = candidates.filter(candidate => candidate.source === 'cli').map(candidate => candidate.edition)
+    expect(cliEditions).toEqual(['cn'])
+  })
+
+  it('keeps an explicit edition config narrowing both desktop and CLI scans', () => {
+    const soloStore = new TraeCredentialStore({ edition: 'solo', ownPath: '/tmp/unused-trae-own', refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    expect(soloStore.candidates().every(candidate => candidate.edition === 'solo')).toBe(true)
+    const intlStore = new TraeCredentialStore({ edition: 'solo-sg', ownPath: '/tmp/unused-trae-own', refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    const intlCandidates = intlStore.candidates()
+    expect(intlCandidates).toHaveLength(1)
+    expect(intlCandidates[0]).toMatchObject({ edition: 'solo-sg', source: 'desktop' })
+  })
+
+  it('normalizes the userRegion claim from the decrypted storage document', () => {
+    expect(normalizeTraeCredential({
+      token: 'at', userId: 'u', host: 'https://growsg-normal.trae.ai', userRegion: { region: 'SG', _aiRegion: 'SG' }, expiredAt: '2030-01-01T00:00:00.000Z',
+    }, 'solo-sg', 'desktop')).toMatchObject({ userRegion: 'SG', edition: 'solo-sg' })
+    expect(normalizeTraeCredential({ token: 'at', expiredAt: '2030-01-01T00:00:00.000Z' }, 'cn', 'desktop')?.userRegion).toBeUndefined()
   })
 
   it('skips a malformed edition instead of hiding valid accounts', async () => {
@@ -154,18 +184,61 @@ describe('TraeCredentialStore', () => {
     await expect(store.status()).resolves.toEqual({ state: 'signed-out' })
     await expect(store.desktopFilePresent()).resolves.toBe(false)
   })
+
+  it('discovers an international account alongside CN ones and reports its region', async () => {
+    const dir = await temp()
+    const cn = join(dir, 'cn.json'); const intl = join(dir, 'intl.json')
+    await writeFile(cn, storage('cn-token', Date.now() + 3_600_000, undefined, 'cn-user'))
+    await writeFile(intl, intlStorage('intl-token', Date.now() + 3_600_000))
+    const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [{ edition: 'cn', path: cn, source: 'desktop' }, { edition: 'solo-sg', path: intl, source: 'desktop' }]
+    const accounts = await store.accounts()
+    expect(accounts.map(account => account.accountName)).toEqual(['cn-user', 'intl-user'])
+    // The routing bucket derives from the credential's own claim: the SG
+    // credential (userRegion SG, growsg host) is `ai`, the CN one is `cn`.
+    expect(accounts.map(account => account.region)).toEqual(['cn', 'ai'])
+    store.selectAccount(accounts[1]!.id)
+    await expect(store.resolve()).resolves.toMatchObject({ accessToken: 'intl-token', host: 'https://growsg-normal.trae.ai', userRegion: 'SG' })
+  })
+
+  it('keeps an international account refreshed in the own copy', async () => {
+    const dir = await temp()
+    const desktop = join(dir, 'cn.json'); const own = join(dir, 'own.json')
+    // The desktop is currently signed in to a different (CN) account; the own
+    // copy still holds the international account's refreshed credential.
+    await writeFile(desktop, storage('cn-token', Date.now() + 3_600_000, undefined, 'cn-user'))
+    await writeFile(own, JSON.stringify({ version: 1, credential: {
+      accessToken: 'refreshed', refreshToken: 'rt', userId: 'intl-user', host: 'https://growsg-normal.trae.ai', userRegion: 'SG',
+      expiresAtMs: Date.now() + 86_400_000, source: 'dsh', edition: 'solo-sg',
+    } }))
+    const store = new TraeCredentialStore({ ownPath: own, refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
+    store.candidates = () => [{ edition: 'cn', path: desktop, source: 'desktop' }]
+    // Both accounts surface: the international edition's refreshed copy is no
+    // longer dropped for not being a CN edition.
+    const accounts = await store.accounts()
+    expect(accounts.map(account => account.accountName)).toEqual(['cn-user', 'intl-user'])
+    expect(accounts.map(account => account.region)).toEqual(['cn', 'ai'])
+    store.selectAccount(accounts[1]!.id)
+    await expect(store.current()).resolves.toMatchObject({ accessToken: 'refreshed', source: 'dsh', edition: 'solo-sg' })
+  })
+
+  it('rejects an international CLI token with a diagnosable error instead of misrouting it', async () => {
+    const dir = await temp(); const token = join(dir, 'trae-jwt-token')
+    await writeFile(token, cliJwtContent('intl-cli-user', Math.floor((Date.now() + 86_400_000) / 1000)))
+    const store = new TraeCredentialStore({ storagePath: token, edition: 'solo-sg', ownPath: join(dir, 'own'), refresh: async () => { throw new Error('unused') } })
+    await expect(store.status()).resolves.toEqual({ state: 'signed-out' })
+    const { failures } = await store.diagnose()
+    expect(failures.some(failure => failure.reason === 'invalid' && /only verified for the CN region/.test(failure.message ?? ''))).toBe(true)
+  })
 })
 
 describe('TraeCredentialStore with a CLI-only sign-in', () => {
-  const cliJwt = (userId: string, exp: number): string =>
-    `${Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')}.${Buffer.from(JSON.stringify({ data: { user_id: userId }, iss: 'trae', exp })).toString('base64url')}.sig`
-
   it('resolves an account from a CLI token with no storage.json present', async () => {
     // Issue #5 regression: on WSL2 the user signs in with `traecli`, which never
     // writes a globalStorage/storage.json. Before CLI candidates existed the
     // store found nothing and the plugin reported "not signed in" forever.
     const dir = await temp(); const token = join(dir, 'trae-jwt-token')
-    await writeFile(token, `${cliJwt('4162118908394475', Math.floor((Date.now() + 86_400_000) / 1000))}\n`)
+    await writeFile(token, `${cliJwtContent('4162118908394475', Math.floor((Date.now() + 86_400_000) / 1000))}\n`)
     const store = new TraeCredentialStore({ storagePath: token, edition: 'cn', ownPath: join(dir, 'own'), refresh: async () => { throw new Error('unused') } })
     const credential = await store.resolve()
     expect(credential).toMatchObject({ userId: '4162118908394475', source: 'cli', edition: 'cn' })
@@ -177,7 +250,7 @@ describe('TraeCredentialStore with a CLI-only sign-in', () => {
 
   it('lets a CLI sign-in be selected as an account', async () => {
     const dir = await temp(); const token = join(dir, 'trae-jwt-token')
-    await writeFile(token, cliJwt('cli-user', Math.floor((Date.now() + 86_400_000) / 1000)))
+    await writeFile(token, cliJwtContent('cli-user', Math.floor((Date.now() + 86_400_000) / 1000)))
     const store = new TraeCredentialStore({ storagePath: token, edition: 'cn', ownPath: join(dir, 'own'), refresh: async () => { throw new Error('unused') } })
     const accounts = await store.accounts()
     expect(accounts).toHaveLength(1)
@@ -208,7 +281,7 @@ describe('TraeCredentialStore with a CLI-only sign-in', () => {
 
   it('reports no failure for a candidate that yields an account', async () => {
     const dir = await temp(); const token = join(dir, 'trae-jwt-token')
-    await writeFile(token, cliJwt('ok-user', Math.floor((Date.now() + 86_400_000) / 1000)))
+    await writeFile(token, cliJwtContent('ok-user', Math.floor((Date.now() + 86_400_000) / 1000)))
     const store = new TraeCredentialStore({ ownPath: join(dir, 'own'), refresh: async () => { throw new Error('unused') } })
     store.candidates = () => [{ edition: 'cn', path: token, source: 'cli' }]
     const { failures } = await store.diagnose()

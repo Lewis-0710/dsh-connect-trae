@@ -55,11 +55,18 @@ export async function readTraeIdentity(candidate: TraeStorageCandidate, options:
   const deviceId = dcDevice ?? devDevice ?? createHash('sha256').update(machineId).digest('hex').slice(0, 32)
   const buildVersion = nonEmpty(storage['iCubeLastVersion'])
   // product.json holds the app version that the real client sends as
-  // x-app-version / x-ide-version. Only CN/SOLO installs are targeted, and the
-  // file lives under the app bundle on macOS but under LOCALAPPDATA\Programs on
-  // Windows. Failures here must not break identity resolution, so each path is
-  // tried in order and non-existent candidates are simply skipped.
-  const appName = candidate.edition === 'cn' ? 'Trae CN' : candidate.edition === 'solo' ? 'TRAE SOLO CN' : undefined
+  // x-app-version / x-ide-version. Every edition's install name is mapped so
+  // an international account also resolves its app version; the file lives
+  // under the app bundle on macOS but under LOCALAPPDATA\Programs on Windows.
+  // Failures here must not break identity resolution, so each path is tried in
+  // order and non-existent candidates are simply skipped.
+  const APP_NAMES_BY_EDITION: Readonly<Record<TraeEdition, string>> = {
+    cn: 'Trae CN',
+    sg: 'Trae',
+    solo: 'TRAE SOLO CN',
+    'solo-sg': 'TRAE SOLO',
+  }
+  const appName = APP_NAMES_BY_EDITION[candidate.edition]
   const productPaths: string[] = []
   if (appName !== undefined && (platform === 'darwin' || platform === 'win32')) {
     if (platform === 'darwin') {
