@@ -391,11 +391,10 @@ export function apply(ctx: Context, config: Config): void {
         wireByName.set(model.name.trim().toLowerCase(), model.wireConfigName)
       }
     }
-    // Persist the merged catalog (including each model's wireConfigName) into
-    // the live catalog the chat bridge reads, so requests resolve the real
-    // config_name even before the user re-saves the refreshed directory.
-    const next = applyImageSelection(merged, imageSet(current(), currentRegion))
-    catalog.set(next)
+    // Discovery is a pure data return (workbuddy semantics): the card's
+    // "refresh" drafts this list for an explicit save, and the startup seed
+    // below installs it into the live catalog. Writing it here would leak
+    // un-enabled models into the runtime catalog until the next save.
     return merged
   }
   ctx.inject(['webServer'], (webCtx) => registerTraeUsageRoute(webCtx, {
@@ -454,12 +453,23 @@ export function apply(ctx: Context, config: Config): void {
     // Resolve the wire-id map once at startup before serving requests, so the
     // chat bridge can translate display ids to real config_names without the
     // user ever opening the model card or re-saving the directory.
+    //
+    // Startup seed (workbuddy semantics): the runtime catalog derives from the
+    // LIVE directory of the selected account's region, so DSH serves what the
+    // upstream actually answers today — an account on a never-configured
+    // region gets its real roster (with wire ids) immediately, without
+    // pressing "refresh" + "save" first. `lastCatalog` is deliberately NOT
+    // seeded here: it belongs to the user's explicit save. A discovery
+    // failure (no credentials, upstream down) degrades to the configured
+    // state — the saved directory, else the region's fallback.
     try {
-      await discoverModels()
+      const models = await discoverModels()
+      if (stopped) return
+      catalog.set(derive(current(), models, currentRegion))
     } catch (error: unknown) {
-      ctx.logger.warn('dsh-connect-trae: wire-id resolution failed at startup; falling back to display ids', error)
+      ctx.logger.warn('dsh-connect-trae: live model directory unavailable; serving the configured catalog', error)
+      catalog.set(configuredModels(current(), currentRegion))
     }
-    catalog.set(configuredModels(current(), currentRegion))
     const trae = createTraeAdapter({
       shim,
       catalog,
