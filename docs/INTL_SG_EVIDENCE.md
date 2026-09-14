@@ -135,7 +135,7 @@ CN 版 `web_user_ent_usage`（积分包明细）在 SG 日志中**未出现**；
 
 | 项 | 风险 | 建议取证方式 |
 |---|---|---|
-| `llm_utils_chat`（SOLO 主聊天路径）在 SG 的端到端可用性 | 日志仅 3 次证据（桌面版）；SOLO 国际版未实测——**受控 chat 会消耗额度，本轮刻意未做** | 实现落地时用 SG 账号发一次最小 `solo_work_lite` 请求（与 CN 版 1.0 上线时的受控探测同型） |
+| ~~`llm_utils_chat`（SOLO 主聊天路径）在 SG 的端到端可用性~~ | **已验证（2026-09-15，等级 A+）**：用 SOLO 国际版有效凭证 + 本项目正式代码路径（`prepareSoloBody` + `buildTraeCnHeaders` + `REGION_GATEWAYS.ai.chat`）发最小 `solo_work_lite` 请求，`gpt-5.4` 经 `coresg-normal.trae.ai` 返回 HTTP 200 + 完整 SSE（`metadata → timing_cost → output("OK") → extra_info → usage → done`，`provider_model_name: gpt-5.4-2026-03-05`）。`SseDecoder`/`decodeTraeEvent` 原样可用。脚本：`scripts/probe-intl-chat.mjs` | — |
 | SG refresh 的 `DeviceInfo` 是否必填 | 官方 App 带、CN 版插件不带也能过（CN 侧）；SG 侧未实测 | TRAE SOLO 国际版 token 2026-09-28 过期后自然触发；或实现时先带官方形态 |
 | Trae 国际桌面版（App 已卸载）的 SG 网关是否同 SOLO | 其 5 月日志与 SOLO 今日日志 host 一致（coresg-normal） | 无需额外取证，按同网关实现 |
 | `custom_model_*` BYOK 条目是否应进目录 | display 名为空、可能只是模板 | 实现阶段在 merge 时按「display 名非空才收」或用户勾选控制 |
