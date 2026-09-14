@@ -23,15 +23,17 @@
   <a href="https://dshfind.com/plugins/dingminhua/dsh-connect-trae"><img src="https://dshfind.com/api/badge/dingminhua/dsh-connect-trae" alt="dshfind plugin"></a>
 </p>
 
-一个独立的 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle 插件。它把本机已登录的 Trae 中国区账号接到 DSH 的模型选择器：模型负责生成结构化工具调用，`bash` / `read` / `write` / `edit` 等工具由 DSH 本地执行；同时提供**只读**的 Work/通用积分与模型管理界面。
+一个独立的 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle 插件。它把本机已登录的 Trae 账号（**国内版与国际版均支持**）接到 DSH 的模型选择器：模型负责生成结构化工具调用，`bash` / `read` / `write` / `edit` 等工具由 DSH 本地执行；同时提供**只读**的用量概览（国内版 Work/通用积分、国际版订阅状态）与模型管理界面。
 
 ## 功能特性
 
 - **Trae 模型接入** —— 把本机登录的 Trae 模型注册为 DSH 的 `trae` provider，模型选择器出现 `DeepSeek-V4-Flash`、`DeepSeek-V4-Pro` 等。
 - **倍率内嵌模型名** —— 模型名称按 Trae 自身菜单的格式显示积分倍率（如 `GLM-5.2 · x0.79`），倍率随目录刷新更新。
 - **DSH 本地工具循环** —— 通过 Trae `llm_utils_chat` 获取待执行的结构化 `tool_calls`，交由 DSH 自带的本地工具执行，再将工具结果回传模型。
-- **中国区多账号切换** —— 自动发现 Trae CN 与 TRAE SOLO CN 本地登录账号，支持重新读取 Token 列表并选择账号；Token 不写入 DSH 设置。
-- **只读积分与模型管理** —— 插件设置面板可分别查看 Work 积分与 DSH 可使用的通用积分，并刷新/启用 Trae 模型；只读查询不消耗积分。
+- **国内国际双区域支持** —— 自动发现 Trae CN / TRAE SOLO CN / Trae / TRAE SOLO 四个本地安装的登录账号；**零配置、零开关**：在账号列表里选国际账号即切到国际版（`coresg-normal.trae.ai` 网关 + Gemini/GPT/MiniMax 阵容），选回国内账号即回国内版。区域由凭证自带的 `userRegion` 声明自动判定。
+- **目录与勾选按区域隔离** —— 国内版与国际版各一套模型目录、勾选、图片开关与上下文预算，切换账号互不干扰。
+- **多账号切换** —— 支持重新读取 Token 列表并选择账号；Token 不写入 DSH 设置。
+- **只读用量与模型管理** —— 国内版查看 Work 积分与通用积分，国际版查看订阅/试用状态；刷新/启用 Trae 模型；只读查询不消耗额度。
 - **安全 loopback shim** —— 随机端口 + 进程内随机 secret，真实 Trae token 不交给 pi-ai。
 
 ## 工作原理

@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.0 (unreleased)
+
+> **🆕 正式支持 Trae 国际版（www.trae.ai）**——国内版与国际版账号在本插件中获得完全对等的支持，**零配置、零开关，全自动**：
+
+- **怎么用**：在插件卡片的账号列表里选国际版账号（Trae / TRAE SOLO 国际版安装的登录）即等于切到国际版；选回国内账号即回到国内版。区域判定完全跟随凭证自带的 `userRegion` 声明（`SG` → 国际，`CN` → 国内，host 后缀与 edition 标签兜底），无需任何手动设置。
+- **国际账号可用的完整功能**（目录/网关/订阅状态均经 2026-09-15 实测取证，见 `docs/INTL_SG_EVIDENCE.md`）：
+  - **模型接入**：聊天与目录请求自动走国际网关 `https://coresg-normal.trae.ai`；国际版 remote 目录（Gemini-3.1-Pro / Gemini-3-Flash / MiniMax-M3 / M2.7 / Kimi-K2.5 / GPT-5.4 / GPT-5.2）进入 DSH 模型选择器；CN 版解析器直通国际响应（`wireConfigName` 机制命中 `gemini-3.1-pro → custom_model_gemini`）。
+  - **订阅状态**：国际账号无 Work 积分包（订阅制），卡片显示订阅/试用状态（`ide_user_pay_status`，官方 App 同款端点）。
+  - **请求头零分叉**：CN 版整套请求头（`x-app-id`、identity 头、`Cloud-IDE-JWT`）被国际网关原样接受；`storage.json` 解密器四版通用。
+- **目录与勾选按区域隔离（国内 / 国际各一套）**：`regions.cn` / `regions.ai` 两套独立槽位（目录、勾选、图片开关、上下文预算各一份），切换账号互不干扰；旧的扁平字段保留为**国内区域的迁移来源**（区域拆分前的配置一律来自国内端点），国际区域绝不继承。
+- **凭证层**：四个桌面版安装（Trae CN / Trae / TRAE SOLO CN / TRAE SOLO）全部纳入账号扫描；国际 CLI（`~/.trae`）因默认 host 未验证暂不支持（给出可诊断错误而非静默误路由）。
+- **refresh 契约按 edition 分叉**：TRAE SOLO 国际版走 `/trae/api/v3/oauth/ExchangeToken` + ClientID `en1oxy7wnw8j9n` + DeviceInfo（官方 App 日志直证）；其余三版维持 `/cloudide/api/v3/trae/oauth/ExchangeToken` + `ono9krqynydwx5`。
+- 测试：region 判定（userRegion 大小写不敏感/host 后缀/edition 三级兜底）、regionStateOf 迁移语义（扁平读作 cn、ai 绝不继承、显式槽优先）、fallback 目录区域隔离与实测快照、solo/remote/usage 的 ai 网关路由断言、refresh 四版契约断言、web-status 的 ai 分派与降级、nextRegionSlots 保存合并语义。208/208 全绿，对纯 CN 用户零行为变化。
+
 ## 1.4.2 (2026-09-14)
 
 > **版本号说明**：`v1.4.1` ~ `v1.4.4` 四个 git tag 曾推送到远端，但对应代码已整体回档到 `1.4.0`、

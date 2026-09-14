@@ -23,15 +23,17 @@
   <a href="https://dshfind.com/plugins/dingminhua/dsh-connect-trae"><img src="https://dshfind.com/api/badge/dingminhua/dsh-connect-trae" alt="dshfind plugin"></a>
 </p>
 
-A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle plugin that connects locally signed-in Trae CN models to the DSH model picker. Trae generates structured tool calls while DSH executes its own local tools, with a read-only Work/general credits and model-management panel.
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle plugin that connects locally signed-in Trae models (**both CN and international installs**) to the DSH model picker. Trae generates structured tool calls while DSH executes its own local tools, with a read-only usage overview (Work/general credits on CN, subscription status on international) and model-management panel.
 
 ## Features
 
 - **Trae model provider** — registers locally signed-in Trae models as the `trae` provider (e.g. `DeepSeek-V4-Flash`, `DeepSeek-V4-Pro`).
 - **Multiplier in the model name** — model names show the credit multiplier in Trae's own menu format (e.g. `GLM-5.2 · x0.79`), updated with each directory refresh.
 - **DSH local tool loop** — gets pending structured `tool_calls` from Trae `llm_utils_chat`, lets DSH execute its own local tools, then returns tool results to the model.
-- **Trae CN account switching** — detects local Trae CN and TRAE SOLO CN sign-ins, refreshes the token list, and lets users select an account without storing tokens in DSH settings.
-- **Read-only credits and model management** — shows Work credits separately from the general credits usable by DSH, and manages which Trae models are enabled. Read-only queries do not consume credits.
+- **Dual-region support (CN / international)** — detects local sign-ins across Trae CN, TRAE SOLO CN, Trae, and TRAE SOLO installs; **zero config, zero toggles**: selecting an international account switches to the international gateway (`coresg-normal.trae.ai` with the Gemini/GPT/MiniMax roster) and back. The region is derived from the credential's own `userRegion` claim.
+- **Region-isolated directories and selections** — CN and international each keep their own model directory, enabled picks, image opt-ins, and context budgets; switching accounts never disturbs the other region.
+- **Account switching** — refreshes the token list and lets users select an account without storing tokens in DSH settings.
+- **Read-only usage and model management** — Work/general credits on CN accounts, subscription/trial status on international ones; enable Trae models freely. Read-only queries consume nothing.
 - **Secure loopback shim** — random port + in-process random secret; the real Trae token is never handed to pi-ai.
 
 ## How it works
