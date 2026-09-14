@@ -6,7 +6,7 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
 import { TraeCredentialStore } from './auth.ts'
-import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeModelInfo } from './catalog.ts'
+import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, fallbackModelsFor, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
 import { pickTraeStorageIdentity, readTraeIdentity } from './identity.ts'
 import { traeStorageCandidates, type TraeEdition } from './paths.ts'
@@ -34,7 +34,7 @@ export {
   type TraeRegion,
   type TraeRegionGateways,
 } from './region.ts'
-export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
+export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, FALLBACK_TRAE_MODELS_AI, fallbackModelsFor, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
 export { decryptTraeStorageValue, parseTraeAuthValue, parseTraeStorageDocument } from './decrypt.ts'
 export { identityHeaders, pickTraeStorageIdentity, readTraeIdentity, type TraeIdentity } from './identity.ts'
 export { parseObservedModelConfig, type TraeObservedModelConfig } from './model-config.ts'
@@ -82,21 +82,64 @@ export const inject = ['llm']
  */
 export const TRAE_SETTINGS_NS = 'trae'
 
+/** One region's saved model state: its own directory and the user's selection within it. */
+export interface TraeRegionState {
+  /** The last-refreshed raw directory for this region; what the card displays. */
+  lastCatalog?: TraeModelInfo[]
+  /** The user's selection in this region, as model ids (= Trae name). */
+  enabledModelIds?: string[]
+  /** Models the user explicitly enabled for image input in this region. */
+  imageModelIds?: string[]
+  /** Local DSH context budget per model in this region. */
+  contextBudgets?: Record<string, number>
+}
+
 export interface Config {
   authFile?: string
   edition?: 'auto' | 'cn' | 'sg' | 'solo' | 'solo-sg'
   /** Stable local account selector; tokens remain outside settings. */
   accountId?: string
-  /** The last-refreshed Trae raw directory; what the plugin card displays. */
+  /**
+   * Per-region model state, keyed `cn` | `ai`. The CN and international apps
+   * expose different rosters, so each keeps its own directory and selection
+   * and switching accounts never drops the other region's picks.
+   */
+  regions?: Partial<Record<TraeRegion, TraeRegionState>>
+  /**
+   * @deprecated Legacy single-slot fields from before the region split. They
+   * predate international support and are read as the CN region's state when
+   * `regions.cn` is absent; new writes go to `regions`.
+   */
   lastCatalog?: TraeModelInfo[]
-  /** The user's ordinary-model selection, as model id (= Trae name). */
+  /** @deprecated See {@link Config.lastCatalog}. */
   enabledModelIds?: string[]
-  /** Local DSH context budget per model; a value may only select an advertised window. */
+  /** @deprecated See {@link Config.lastCatalog}. */
   contextBudgets?: Record<string, number>
-  /** Models the user explicitly enabled for image input; text is always enabled. */
+  /** @deprecated See {@link Config.lastCatalog}. */
   imageModelIds?: string[]
-  /** Legacy generated runtime catalog; kept for backwards compatibility. */
+  /** @deprecated Legacy generated runtime catalog; kept for backwards compatibility. */
   models?: TraeModelInfo[]
+}
+
+/**
+ * One region's saved state. A config written before the region split has only
+ * the flat fields: those were always captured from the CN endpoint (the
+ * plugin had no international support), so they are read as the CN state and
+ * only when no explicit CN slot exists. The ai region never inherits them —
+ * that inheritance is exactly the bug where a stale CN directory would be
+ * intersected with the international catalog and silently drop the user's
+ * picks (the same failure workbuddy fixed with its region split).
+ */
+export function regionStateOf(config: Config, region: TraeRegion): TraeRegionState {
+  const stored = config.regions?.[region]
+  if (stored !== undefined) return stored
+  if (region !== 'cn') return {}
+  return {
+    ...config.lastCatalog === undefined ? {} : { lastCatalog: config.lastCatalog },
+    ...config.enabledModelIds === undefined ? {} : { enabledModelIds: config.enabledModelIds },
+    ...config.imageModelIds === undefined ? {} : { imageModelIds: config.imageModelIds },
+    ...config.contextBudgets === undefined ? {} : { contextBudgets: config.contextBudgets },
+  }
 }
 
 const modelConfig = z.object({
@@ -110,21 +153,40 @@ const modelConfig = z.object({
   creditMultiplier: z.number(),
 })
 
+const regionStateConfig = z.object({
+  lastCatalog: z.array(modelConfig).default([]),
+  enabledModelIds: z.array(z.string()).default([]),
+  imageModelIds: z.array(z.string()).default([]),
+  contextBudgets: z.dict(z.number().step(1).min(1)).default({}),
+})
+
 export const Config: z<Config> = z.object({
   authFile: z.string().description('Optional Trae storage.json path override'),
   edition: z.union(['auto', 'cn', 'sg', 'solo', 'solo-sg']).default('auto').description('Trae edition hint'),
   accountId: z.string().description('Selected local Trae account id (never a token)'),
-  lastCatalog: z.array(modelConfig).description('Last refreshed Trae raw model directory shown by the plugin card') as z<TraeModelInfo[]>,
-  enabledModelIds: z.array(z.string()).default([]).description('Trae model ids the user enabled'),
-  contextBudgets: z.dict(z.number().step(1).min(1)).default({}).description('Local DSH context budget per Trae model'),
-  imageModelIds: z.array(z.string()).default([]).description('Trae model ids the user explicitly enabled for image input'),
+  regions: z.dict(regionStateConfig).default({}).description('Per-region model directory and selection, keyed cn | ai'),
+  lastCatalog: z.array(modelConfig).description('Deprecated: pre-region-split CN model directory') as z<TraeModelInfo[]>,
+  enabledModelIds: z.array(z.string()).default([]).description('Deprecated: pre-region-split CN selection'),
+  contextBudgets: z.dict(z.number().step(1).min(1)).default({}).description('Deprecated: pre-region-split CN context budgets'),
+  imageModelIds: z.array(z.string()).default([]).description('Deprecated: pre-region-split CN image opt-in'),
   models: z.array(modelConfig).description('Legacy generated Trae model list') as z<TraeModelInfo[]>,
 })
 
 export function apply(ctx: Context, config: Config): void {
   const catalog = new TraeCatalog()
-  const enabledSet = (value: Config): ReadonlySet<string> => new Set(value.enabledModelIds ?? [])
-  const imageSet = (value: Config): ReadonlySet<string> => new Set(value.imageModelIds ?? [])
+  // Region of the selected account, tracked so a settings change can recompute
+  // the runtime catalog without re-resolving the credential synchronously.
+  // Every path that reads the credential (startup seed, discovery, card route)
+  // refreshes it, so it converges on the real region. Unsigned/unresolvable
+  // credentials keep the last known region so the catalog still reflects the
+  // account the user last had selected.
+  let currentRegion: TraeRegion = 'cn'
+  const convergeRegion = async (): Promise<TraeRegion> => {
+    try { currentRegion = regionOfCredential(await store.resolve()) } catch { /* keep the last known region */ }
+    return currentRegion
+  }
+  const enabledSet = (value: Config, region: TraeRegion): ReadonlySet<string> => new Set(regionStateOf(value, region).enabledModelIds ?? [])
+  const imageSet = (value: Config, region: TraeRegion): ReadonlySet<string> => new Set(regionStateOf(value, region).imageModelIds ?? [])
   // Display keys (lowercased id AND name) of every model known to be callable
   // via `llm_utils_chat`, populated once `discoverModels` merges Remote with
   // `get_detail_param`. A model whose id and name are both absent here is a dead
@@ -156,23 +218,32 @@ export function apply(ctx: Context, config: Config): void {
   // live wire map can only ever confirm the ids it happens to know, and
   // filtering against it would let a partial catalog delete the safety net
   // precisely when it is needed. Its ids are the well-known Trae model names.
-  const fallbackModels = (value: Config): readonly TraeModelInfo[] =>
-    applyImageSelection(FALLBACK_TRAE_MODELS, imageSet(value))
-  const derive = (value: Config, raw: readonly TraeModelInfo[]): readonly TraeModelInfo[] => {
-    const selectedImages = imageSet(value)
-    const derived = deriveCatalog(applyImageSelection(sanitizeCatalog(dropDeadModels(raw)), selectedImages), enabledSet(value), value.contextBudgets ?? {})
-    return derived.length > 0 ? derived : fallbackModels(value)
+  // Region-scoped: the two regions expose different rosters, so an account
+  // must never see the other region's fallback list.
+  const fallbackModels = (value: Config, region: TraeRegion): readonly TraeModelInfo[] =>
+    applyImageSelection(fallbackModelsFor(region), imageSet(value, region))
+  const derive = (value: Config, raw: readonly TraeModelInfo[], region: TraeRegion): readonly TraeModelInfo[] => {
+    const selectedImages = imageSet(value, region)
+    const derived = deriveCatalog(applyImageSelection(sanitizeCatalog(dropDeadModels(raw)), selectedImages), enabledSet(value, region), regionStateOf(value, region).contextBudgets ?? {})
+    return derived.length > 0 ? derived : fallbackModels(value, region)
   }
-  const configuredModels = (value: Config): readonly TraeModelInfo[] =>
-    value.lastCatalog?.length ? derive(value, value.lastCatalog)
-      : value.models?.length ? derive(value, value.models)
-        : fallbackModels(value)
-  // What the plugin card displays: the last-refreshed raw directory, so the
-  // user re-reads the current Trae catalog rather than a stale saved snapshot.
-  const displayModels = (value: Config): readonly TraeModelInfo[] =>
-    value.lastCatalog?.length ? dropDeadModels(sanitizeCatalog(value.lastCatalog))
-      : value.models?.length ? dropDeadModels(sanitizeCatalog(value.models))
-        : FALLBACK_TRAE_MODELS
+  // Runtime catalog for one region: that region's saved directory (explicit
+  // slot, else the pre-split flat fields which are CN-only), else the legacy
+  // `models` list (also CN-only), else the region's fallback.
+  const configuredModels = (value: Config, region: TraeRegion): readonly TraeModelInfo[] => {
+    const state = regionStateOf(value, region)
+    return state.lastCatalog?.length ? derive(value, state.lastCatalog, region)
+      : region === 'cn' && value.models?.length ? derive(value, value.models, region)
+        : fallbackModels(value, region)
+  }
+  // What the plugin card displays: the region's last-refreshed raw directory,
+  // so the user re-reads the current Trae catalog rather than a stale snapshot.
+  const displayModels = (value: Config, region: TraeRegion): readonly TraeModelInfo[] => {
+    const state = regionStateOf(value, region)
+    return state.lastCatalog?.length ? dropDeadModels(sanitizeCatalog(state.lastCatalog))
+      : region === 'cn' && value.models?.length ? dropDeadModels(sanitizeCatalog(value.models))
+        : fallbackModelsFor(region)
+  }
   const store = new TraeCredentialStore({
     ...config.authFile === undefined ? {} : { storagePath: config.authFile },
     edition: config.edition ?? 'auto',
@@ -278,6 +349,10 @@ export function apply(ctx: Context, config: Config): void {
   let current = () => config
   let invalidateAdapter = (): void => {}
   const discoverModels = async (signal?: AbortSignal): Promise<readonly TraeModelInfo[]> => {
+    // Converge the tracked region on the selected credential first: the
+    // merged catalog below is persisted into the live bridge catalog and the
+    // card writes its draft into the region's own slot afterwards.
+    await convergeRegion()
     // The Remote /models directory is the model skeleton (display id, name,
     // context, credit, reasoning). get_detail_param only supplies the real
     // llm_utils_chat config_name for models whose display id differs from the
@@ -316,15 +391,18 @@ export function apply(ctx: Context, config: Config): void {
     // Persist the merged catalog (including each model's wireConfigName) into
     // the live catalog the chat bridge reads, so requests resolve the real
     // config_name even before the user re-saves the refreshed directory.
-    const next = applyImageSelection(merged, imageSet(current()))
+    const next = applyImageSelection(merged, imageSet(current(), currentRegion))
     catalog.set(next)
     return merged
   }
   ctx.inject(['webServer'], (webCtx) => registerTraeUsageRoute(webCtx, {
     store,
     client: usageClient,
-    displayModels: () => displayModels(current()),
-    enabledModelIds: () => current().enabledModelIds ?? [],
+    // Region-scoped accessors: the card sees the selected account's region.
+    // (The web-status interface itself grows explicit region parameters in a
+    // later stage; the closure already reads the tracked region here.)
+    displayModels: () => displayModels(current(), currentRegion),
+    enabledModelIds: () => regionStateOf(current(), currentRegion).enabledModelIds ?? [],
     discoverModels,
     rawDiagnostic: () => rawDiagnostic(),
   }))
@@ -334,8 +412,14 @@ export function apply(ctx: Context, config: Config): void {
     onChange() {
       const next = current()
       store.setSource(next.authFile, next.edition ?? 'auto', next.accountId)
-      catalog.set(configuredModels(next))
+      catalog.set(configuredModels(next, currentRegion))
       invalidateAdapter()
+      // The account may have changed region (CN ↔ ai); converge the runtime
+      // catalog on the selected credential's own region.
+      void convergeRegion().then(region => {
+        catalog.set(configuredModels(current(), region))
+        invalidateAdapter()
+      })
     },
   }
   // DSH 0.1.2 replaced the free `installSettingsSection` helper with the
@@ -372,7 +456,7 @@ export function apply(ctx: Context, config: Config): void {
     } catch (error: unknown) {
       ctx.logger.warn('dsh-connect-trae: wire-id resolution failed at startup; falling back to display ids', error)
     }
-    catalog.set(configuredModels(current()))
+    catalog.set(configuredModels(current(), currentRegion))
     const trae = createTraeAdapter({
       shim,
       catalog,
@@ -395,7 +479,7 @@ export function apply(ctx: Context, config: Config): void {
         const cancellation = signal ?? (request as { signal?: AbortSignal }).signal
         const next = applyImageSelection(
           await discoverModels(cancellation),
-          imageSet(current()),
+          imageSet(current(), currentRegion),
         )
         return next.map(model => ({
           id: model.id,

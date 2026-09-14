@@ -6,6 +6,7 @@ import {
   regionOfHost,
   regionOfUserRegion,
 } from '../src/region.ts'
+import { regionStateOf } from '../src/index.ts'
 
 describe('regionOfEdition', () => {
   it('maps the four editions onto the two routing buckets', () => {
@@ -80,5 +81,43 @@ describe('REGION_GATEWAYS', () => {
     expect(REGION_GATEWAYS.ai.remote).toContain('coresg-normal.trae.ai')
     expect(REGION_GATEWAYS.cn.chat).not.toBe(REGION_GATEWAYS.ai.chat)
     expect(REGION_GATEWAYS.cn.remote).not.toBe(REGION_GATEWAYS.ai.remote)
+  })
+})
+
+describe('regionStateOf (config bucket migration)', () => {
+  it('returns the explicit region slot when present', () => {
+    const config = {
+      regions: {
+        cn: { enabledModelIds: ['glm-5.2'] },
+        ai: { enabledModelIds: ['gpt-5.4'] },
+      },
+      enabledModelIds: ['legacy'],
+    }
+    expect(regionStateOf(config, 'cn')).toEqual({ enabledModelIds: ['glm-5.2'] })
+    expect(regionStateOf(config, 'ai')).toEqual({ enabledModelIds: ['gpt-5.4'] })
+  })
+
+  it('reads the pre-split flat fields as the CN region and only for CN', () => {
+    const legacy = {
+      lastCatalog: [{ id: 'glm-5.2', name: 'GLM-5.2' }],
+      enabledModelIds: ['glm-5.2'],
+      imageModelIds: ['glm-5.2'],
+      contextBudgets: { 'glm-5.2': 200_000 },
+    }
+    // Pre-split configs were always captured from the CN endpoint, so the flat
+    // fields are the CN state exactly.
+    expect(regionStateOf(legacy, 'cn')).toEqual(legacy)
+    // The ai region NEVER inherits them: that inheritance is the bug where a
+    // stale CN directory is intersected with the international catalog and
+    // silently drops the user's picks.
+    expect(regionStateOf(legacy, 'ai')).toEqual({})
+  })
+
+  it('ignores absent flat fields instead of materializing undefined keys', () => {
+    const state = regionStateOf({}, 'cn')
+    expect('lastCatalog' in state).toBe(false)
+    expect('enabledModelIds' in state).toBe(false)
+    expect('imageModelIds' in state).toBe(false)
+    expect('contextBudgets' in state).toBe(false)
   })
 })

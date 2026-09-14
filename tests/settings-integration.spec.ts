@@ -97,3 +97,66 @@ describe('built-in fallback is a safety net, not a filter target', () => {
     }
   })
 })
+
+describe('per-region model slots', () => {
+  it('an explicit regions.cn slot wins over the deprecated flat fields', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    await ctx.plugin(Trae, { edition: 'auto' })
+    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
+
+    // Both shapes present: the explicit slot must be what the runtime serves.
+    await ctx.settings.update(Trae.TRAE_SETTINGS_NS, {
+      lastCatalog: [
+        { id: 'glm-5.2', name: 'GLM-5.2', input: ['text'] },
+      ],
+      regions: {
+        cn: {
+          lastCatalog: [
+            { id: 'kimi-k2.6', name: 'Kimi-K2.6', input: ['text'] },
+            { id: 'glm-5.2', name: 'GLM-5.2', input: ['text'] },
+          ],
+          enabledModelIds: ['kimi-k2.6'],
+        },
+      },
+    })
+
+    const ids = (await ctx.llm.listModels('trae')).map(model => model.id)
+    expect(ids).toContain('kimi-k2.6')
+    // The flat-field-only selection is gone: the slot owns the runtime catalog.
+    expect(ids).not.toContain('DeepSeek-V4-Flash')
+  })
+
+  it('saving an ai slot never leaks its roster into the CN runtime', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    await ctx.plugin(Trae, { edition: 'auto' })
+    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
+
+    // An international directory saved into the ai slot: with no signed-in
+    // international account the tracked region stays cn, so the runtime catalog
+    // must keep serving the CN roster and never the ai one.
+    await ctx.settings.update(Trae.TRAE_SETTINGS_NS, {
+      regions: {
+        ai: {
+          lastCatalog: [
+            { id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview', input: ['text'] },
+            { id: 'gpt-5.4', name: 'GPT-5.4', input: ['text'] },
+          ],
+          enabledModelIds: ['gpt-5.4'],
+        },
+      },
+    })
+
+    const ids = (await ctx.llm.listModels('trae')).map(model => model.id)
+    expect(ids).not.toContain('gemini-3.1-pro')
+    expect(ids).not.toContain('gpt-5.4')
+    for (const fallback of ['auto', 'DeepSeek-V4-Flash', 'glm-5.2']) {
+      expect(ids).toContain(fallback)
+    }
+  })
+})

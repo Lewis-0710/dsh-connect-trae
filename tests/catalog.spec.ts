@@ -6,6 +6,8 @@ import {
   deriveCatalog,
   discoveredCatalog,
   FALLBACK_TRAE_MODELS,
+  FALLBACK_TRAE_MODELS_AI,
+  fallbackModelsFor,
   mergeTraeModelSources,
   sanitizeCatalog,
   TraeCatalog,
@@ -162,5 +164,28 @@ describe('mergeTraeModelSources', () => {
     ]
     const merged = mergeTraeModelSources(remote, wire)
     expect(merged.map(model => model.id)).toEqual(['glm-5.2'])
+  })
+})
+
+describe('region-scoped fallback directories', () => {
+  it('keeps one fallback list per region and never shares a roster', () => {
+    expect(fallbackModelsFor('cn')).toBe(FALLBACK_TRAE_MODELS)
+    expect(fallbackModelsFor('ai')).toBe(FALLBACK_TRAE_MODELS_AI)
+    // The CN roster has no Gemini/GPT/MiniMax entries; the ai roster has no
+    // GLM/DeepSeek entries. An account must never see the other region's list.
+    expect(FALLBACK_TRAE_MODELS.map(model => model.id)).not.toContain('gemini-3.1-pro')
+    expect(FALLBACK_TRAE_MODELS.map(model => model.id)).not.toContain('gpt-5.4')
+    expect(FALLBACK_TRAE_MODELS_AI.map(model => model.id)).not.toContain('glm-5.2')
+    expect(FALLBACK_TRAE_MODELS_AI.map(model => model.id)).not.toContain('DeepSeek-V4-Pro')
+  })
+
+  it('captures the verified international roster from the live directory', () => {
+    // Snapshot of coresg-normal.trae.ai/api/remote/v1/models, 2026-09-15
+    // (docs/INTL_SG_EVIDENCE.md §3). All entries default to text-only input:
+    // image stays the user's explicit opt-in via imageModelIds.
+    expect(FALLBACK_TRAE_MODELS_AI.map(model => model.id)).toEqual([
+      'gemini-3.1-pro', 'gemini-3-flash-solo', 'minimax-m3', 'minimax-m2.7', 'kimi-k2.5', 'gpt-5.4', 'gpt-5.2',
+    ])
+    expect(FALLBACK_TRAE_MODELS_AI.every(model => model.input === undefined)).toBe(true)
   })
 })
