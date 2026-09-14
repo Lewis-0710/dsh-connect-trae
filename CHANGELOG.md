@@ -1,11 +1,14 @@
 # Changelog
 
-## 1.4.1 (2026-09-14)
+## 1.4.2 (2026-09-14)
 
-> **版本号说明**：`v1.4.1` ~ `v1.4.4` 四个 git tag 曾推送到远端，但对应代码已整体回档到 `1.4.0`，
-> 且这批版本**从未发布到 npm**。本次发布前已删除这四个废弃 tag（备份见
-> `backup/abandoned-v1.4.1-v1.4.4` 分支及 `abandoned-tags-v1.4.1-4.bundle`），
-> 使 git tag 与 npm 版本号从 `1.4.1` 起重新对齐、连续编号。
+> **版本号说明**：`v1.4.1` ~ `v1.4.4` 四个 git tag 曾推送到远端，但对应代码已整体回档到 `1.4.0`、
+> 从未发布到 npm。发布前已删除这四个废弃 tag（备份见 `backup/abandoned-v1.4.1-v1.4.4` 分支
+> 及 `abandoned-tags-v1.4.1-4.bundle`）。
+>
+> 本次实际使用 `1.4.2` 而非 `1.4.1`：`1.4.1` 在 npm 上处于 **staged 状态**
+> （由一次未完成的发布预占，`npm view` 查不到该版本，但 `npm publish` 报
+> `E409 Cannot publish over previously staged version`），该编号已无法复用。
 
 ### Fixes
 
