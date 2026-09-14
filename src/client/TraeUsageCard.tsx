@@ -462,7 +462,29 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                     </section>
                   </>
                 : null}
-              {status.status === 'signed-out' ? <p className="dsm-trae-usage-text">{status.message ?? t('row.signedOutHint')}</p> : null}
+              {status.status === 'signed-out'
+                ? <>
+                  <p className="dsm-trae-usage-text">{status.message ?? t('row.signedOutHint')}</p>
+                  {status.searched && status.searched.length > 0
+                    ? <details className="dsm-trae-searched">
+                      <summary>{t('row.searchedTitle')} ({status.searched.length})</summary>
+                      <p className="dsm-trae-searched-hint">{t('row.searchedHint')}</p>
+                      <ul className="dsm-trae-searched-list">
+                        {status.searched.map(item => (
+                          <li key={`${item.source}:${item.path}`}>
+                            <code>{item.path}</code>
+                            <span className="dsm-trae-searched-reason">
+                              {t(item.source === 'cli' ? 'row.sourceCli' : 'row.sourceDesktop')}
+                              {' · '}
+                              {t(item.reason === 'missing' ? 'row.reasonMissing' : item.reason === 'unreadable' ? 'row.reasonUnreadable' : 'row.reasonInvalid')}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                    : null}
+                </>
+                : null}
               {status.status === 'error' ? <p className="dsm-trae-usage-error">{status.message}</p> : null}
             </div>
           : null}

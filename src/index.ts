@@ -175,8 +175,8 @@ export function apply(ctx: Context, config: Config): void {
     // often install only SOLO, so pinning the first (cn) candidate and reading a
     // missing file used to throw ENOENT and break every refresh/chat request.
     const candidates = config.authFile === undefined
-      ? traeStorageCandidates().filter(item => (item.edition === 'cn' || item.edition === 'solo') && (config.edition === undefined || config.edition === 'auto' || item.edition === config.edition))
-      : [{ edition: config.edition === undefined || config.edition === 'auto' ? 'solo' as const : config.edition, path: config.authFile }]
+      ? traeStorageCandidates().filter(item => item.source === 'desktop' && (item.edition === 'cn' || item.edition === 'solo') && (config.edition === undefined || config.edition === 'auto' || item.edition === config.edition))
+      : [{ edition: config.edition === undefined || config.edition === 'auto' ? 'solo' as const : config.edition, path: config.authFile, source: 'desktop' as const }]
     if (candidates.length === 0) throw new Error('Trae storage was not found')
     return pickTraeStorageIdentity(candidates)
   }
