@@ -68,14 +68,17 @@ export function normalizeTraeVersionCode(buildVersion: string | undefined): stri
   return /^\d+$/.test(trimmed) ? trimmed : TRAE_VERSION_CODE_FALLBACK
 }
 
-export function buildTraeCnHeaders(
+/**
+ * Headers shared by every Trae edition. The same shape is accepted by both
+ * gateways (verified read-only on the international gateway 2026-09-15,
+ * docs/INTL_SG_EVIDENCE.md §2.3: identical `x-app-id`, identity headers, and
+ * `Cloud-IDE-JWT` auth), so there is no per-edition branch any more.
+ */
+export function buildTraeHeaders(
   credential: TraeCredential,
   identity: TraeIdentity,
   options: { appId?: string; requestId?: string; profile?: TraeHeaderProfile } = {},
 ): Record<string, string> {
-  if (credential.edition !== 'cn' && credential.edition !== 'solo') {
-    throw new Error(`Trae ${credential.edition} request contract is not verified`)
-  }
   const requestId = options.requestId ?? randomUUID()
   const traceId = requestId.replaceAll('-', '').slice(0, 32)
   const profile = options.profile ?? 'agent-task'
@@ -118,6 +121,9 @@ export function buildTraeCnHeaders(
     'Accept': 'text/event-stream',
   }
 }
+
+/** Backwards-compatible alias; the headers are no longer CN-specific. */
+export const buildTraeCnHeaders = buildTraeHeaders
 
 export function traeEndpoint(baseUrl: string, path: string): string {
   return `${baseUrl.replace(/\/$/, '')}/${path.replace(/^\//, '')}`

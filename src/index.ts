@@ -284,10 +284,11 @@ export function apply(ctx: Context, config: Config): void {
     if (candidates.length === 0) throw new Error('Trae storage was not found')
     return pickTraeStorageIdentity(candidates)
   }
+  // No baseUrl: the chat gateway follows the selected credential's region
+  // (`trae-api-cn.mchost.guru` for CN, `coresg-normal.trae.ai` for ai).
   const solo = new TraeSoloUpstreamClient({
     credential: () => store.resolve(),
     identity,
-    baseUrl: 'https://trae-api-cn.mchost.guru',
     log: (message, detail) => ctx.logger.warn(message, detail),
   })
   const remoteCatalog = new TraeSoloRemoteCatalogClient({ credential: () => store.resolve() })
@@ -317,12 +318,14 @@ export function apply(ctx: Context, config: Config): void {
         credential: () => store.resolve(),
         identity: async () => identity,
         config: { model: runtime.modelName, configName: runtime.configName, passBackReasoning: true, runtime },
-        baseUrl: 'https://trae-api-cn.mchost.guru',
       })
+      // The raw-chat endpoint is region-scoped like every other gateway: the
+      // probe model is CN-only, so a CN catalog drives this disabled path today.
+      const rawRegion = regionOfCredential(await store.resolve())
       const gateway = createTraeRawGateway({
         raw: rawClient,
         solo: upstream,
-        endpoint: 'https://trae-api-cn.mchost.guru/api/ide/v2/llm_raw_chat',
+        endpoint: `${REGION_GATEWAYS[rawRegion].chat}/api/ide/v2/llm_raw_chat`,
         edition: identity.edition,
         identity: { appVersion: identity.appVersion ?? '', buildVersion: identity.buildVersion ?? '' },
         runtime,

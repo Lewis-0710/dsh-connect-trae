@@ -1,6 +1,7 @@
 import type { TraeCredential } from './auth.ts'
 import type { TraeIdentity } from './identity.ts'
 import { buildTraeCnHeaders, traeEndpoint } from './protocol.ts'
+import { REGION_GATEWAYS, regionOfCredential } from './region.ts'
 import { parseReasoningCapability, type TraeReasoningCapability } from './reasoning.ts'
 import type { TraeChatResult, TraeUpstreamErrorKind } from './upstream.ts'
 
@@ -98,7 +99,8 @@ export class TraeSoloUpstreamClient {
 
   async fetchModels(signal?: AbortSignal): Promise<TraeSoloModel[]> {
     const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()])
-    const response = await this.fetchImpl(traeEndpoint(this.options.baseUrl ?? credential.host, TRAE_SOLO_MODELS_PATH), {
+    const base = this.options.baseUrl ?? REGION_GATEWAYS[regionOfCredential(credential)].chat
+    const response = await this.fetchImpl(traeEndpoint(base, TRAE_SOLO_MODELS_PATH), {
       method: 'POST',
       headers: { ...buildTraeCnHeaders(credential, identity), Accept: 'application/json' },
       body: JSON.stringify({
@@ -155,9 +157,10 @@ export class TraeSoloUpstreamClient {
     catch { return { ok: false, status: 400, kind: 'client', message: 'invalid JSON request' } }
     const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()])
     const headers = buildTraeCnHeaders(credential, identity)
+    const base = this.options.baseUrl ?? REGION_GATEWAYS[regionOfCredential(credential)].chat
     let response: Response
     try {
-      response = await this.fetchImpl(traeEndpoint(this.options.baseUrl ?? credential.host, TRAE_SOLO_CHAT_PATH), {
+      response = await this.fetchImpl(traeEndpoint(base, TRAE_SOLO_CHAT_PATH), {
         method: 'POST', headers, body: prepared, signal: signal ?? AbortSignal.timeout(120_000),
       })
     } catch (error: unknown) {
