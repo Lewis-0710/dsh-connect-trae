@@ -10,7 +10,7 @@ import { createElement as h } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { TRAE_ACCOUNTS_REFRESH_PATH, TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from '../status-paths.ts'
+import { nextRegionSlots, TRAE_ACCOUNTS_REFRESH_PATH, TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from '../status-paths.ts'
 import type { TraeWebModel, TraeWebUsage } from '../status-paths.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
@@ -200,14 +200,30 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   }
 
   const settingsValue = settingsScope?.getSnapshot().value
-  const savedContextBudgets = typeof settingsValue === 'object' && settingsValue !== null && typeof (settingsValue as { contextBudgets?: unknown }).contextBudgets === 'object' && (settingsValue as { contextBudgets?: unknown }).contextBudgets !== null
-    ? (settingsValue as { contextBudgets: Record<string, number> }).contextBudgets
+  // Region-scoped saved state: the signed-in account's own slot first; the
+  // pre-region-split flat fields are only read for cn (the Host reads them the
+  // same way, see regionStateOf), so a budget set on one region's model is
+  // never applied to the other's.
+  const region = status.status === 'signed-in' ? status.region : 'cn'
+  const configuredRegions = typeof settingsValue === 'object' && settingsValue !== null && typeof (settingsValue as { regions?: unknown }).regions === 'object' && (settingsValue as { regions?: unknown }).regions !== null
+    ? (settingsValue as { regions: Record<string, { contextBudgets?: unknown; imageModelIds?: unknown[] }> }).regions
     : {}
-  const savedImageIds = new Set(
-    typeof settingsValue === 'object' && settingsValue !== null && Array.isArray((settingsValue as { imageModelIds?: unknown }).imageModelIds)
-      ? (settingsValue as { imageModelIds: unknown[] }).imageModelIds.filter((id): id is string => typeof id === 'string')
-      : [],
-  )
+  const regionSlot = configuredRegions[region]
+  const legacySlot = region === 'cn' && regionSlot === undefined
+  const slotContextBudgets = typeof regionSlot?.contextBudgets === 'object' && regionSlot.contextBudgets !== null
+    ? regionSlot.contextBudgets as Record<string, number>
+    : undefined
+  const legacyContextBudgets = legacySlot && typeof settingsValue === 'object' && settingsValue !== null && typeof (settingsValue as { contextBudgets?: unknown }).contextBudgets === 'object' && (settingsValue as { contextBudgets?: unknown }).contextBudgets !== null
+    ? (settingsValue as { contextBudgets: Record<string, number> }).contextBudgets
+    : undefined
+  const savedContextBudgets = slotContextBudgets ?? legacyContextBudgets ?? {}
+  const slotImageIds = Array.isArray(regionSlot?.imageModelIds)
+    ? regionSlot.imageModelIds.filter((id): id is string => typeof id === 'string')
+    : undefined
+  const legacyImageIds = legacySlot && typeof settingsValue === 'object' && settingsValue !== null && Array.isArray((settingsValue as { imageModelIds?: unknown }).imageModelIds)
+    ? (settingsValue as { imageModelIds: unknown[] }).imageModelIds.filter((id): id is string => typeof id === 'string')
+    : []
+  const savedImageIds = new Set(slotImageIds ?? legacyImageIds)
   void settingsRevision
   // The card always renders the last-refreshed raw directory (`status.models`
   // carries `lastCatalog`), never a stale saved snapshot. Enabled flags come
@@ -253,13 +269,19 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
     if (settingsScope === undefined) return
     setSaving(true)
     try {
-      // Save the raw directory plus the pure selection and budgets. The Host
+      // Save this region's raw directory plus the pure selection. The Host
       // derives the runtime catalog from these on save/restart, so re-opening
       // the card re-reads Trae's current catalog instead of a stale snapshot.
-      await settingsScope.set('lastCatalog', visibleModels.map(model => ({ ...model, input: ['text'] })))
-      await settingsScope.set('enabledModelIds', [...activeEnabledIds])
-      await settingsScope.set('imageModelIds', [...activeImageIds].filter(id => activeEnabledIds.has(id)))
-      await settingsScope.set('contextBudgets', activeContextBudgets)
+      // The CN and international apps expose different rosters, so the write
+      // targets the slot keyed by the signed-in account's region: switching
+      // accounts no longer clobbers the other region's picks.
+      if (status.status !== 'signed-in') return
+      await settingsScope.set('regions', nextRegionSlots(configuredRegions, status.region, {
+        lastCatalog: visibleModels.map(model => ({ ...model, input: ['text'] })),
+        enabledModelIds: [...activeEnabledIds],
+        imageModelIds: [...activeImageIds].filter(id => activeEnabledIds.has(id)),
+        contextBudgets: activeContextBudgets,
+      }))
       discardModels()
       await refreshUsage()
     } finally {
@@ -328,13 +350,39 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                         disabled={switchingAccount || settingsScope?.getSnapshot().writable !== true}
                         onChange={event => { void switchAccount(event.currentTarget.value) }}
                       >
-                        {status.accounts.map(account => <option key={account.id} value={account.id}>{account.accountName} · {account.edition}</option>)}
+                        {status.accounts.map(account => <option key={account.id} value={account.id}>{account.accountName} · {account.region === 'ai' ? t('row.regionAi') : t('row.regionCn')} · {account.edition}</option>)}
                       </select>
                     </div>
                   </section>
                 : null}
               {status.status === 'signed-in'
                 ? <>
+                    {status.payStatus === undefined ? null : (
+                      <div className="dsm-trae-usage-list">
+                        <div className="dsm-trae-usage-stats dsm-trae-usage-stats-two">
+                          <div className="dsm-trae-usage-stat dsm-trae-usage-stat-general">
+                            <div className="dsm-trae-usage-stat-head">
+                              <span className="dsm-trae-usage-stat-label">{t('row.subscriptionLabel')}</span>
+                              <span className={`dsm-trae-usage-stat-badge ${status.payStatus.hasPackage ? 'dsm-trae-usage-stat-badge-on' : 'dsm-trae-usage-stat-badge-off'}`}>
+                                {t(status.payStatus.hasPackage ? 'row.subscribed' : 'row.noPackage')}
+                              </span>
+                            </div>
+                            <span className="dsm-trae-usage-stat-value dsm-trae-usage-stat-value-general">
+                              {status.payStatus.inTrial && status.payStatus.trialEndTimeMs > 0
+                                ? t('row.trialUntil', { date: formatDateTime(status.payStatus.trialEndTimeMs) })
+                                : t(status.payStatus.hasPackage ? 'row.subscribed' : 'row.noPackage')}
+                            </span>
+                            <span className="dsm-trae-usage-stat-hint">
+                              {status.payStatus.enableSoloLite || status.payStatus.enableSoloCoder || status.payStatus.enableSoloBuilder || status.payStatus.enableSoloWeb
+                                ? [status.payStatus.enableSoloLite ? 'SOLO Lite' : '', status.payStatus.enableSoloCoder ? 'SOLO Coder' : '', status.payStatus.enableSoloBuilder ? 'SOLO Builder' : '', status.payStatus.enableSoloWeb ? 'SOLO Web' : ''].filter(Boolean).join(' · ')
+                                : (status.payStatus.isDollarUsageBilling ? 'dollar usage billing' : '')}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {status.payStatusError === undefined ? null
+                      : <p className="dsm-trae-usage-error">{t('row.payStatusError', { message: status.payStatusError })}</p>}
                     {status.credits === undefined ? null : (
                       <div className="dsm-trae-usage-list">
                         <div className="dsm-trae-usage-stats dsm-trae-usage-stats-two">

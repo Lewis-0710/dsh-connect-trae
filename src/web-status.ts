@@ -16,20 +16,25 @@ import type { TraeCredentialStore } from './auth.ts'
 import type { TraeModelInfo } from './catalog.ts'
 import type { TraeUsageClient } from './usage.ts'
 import type { TraeRawDiagnostic } from './raw-diagnostic.ts'
+import { regionOfCredential, type TraeRegion } from './region.ts'
 import { TRAE_ACCOUNTS_REFRESH_PATH, TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from './status-paths.ts'
 import type { TraeWebCredits, TraeWebUsage } from './status-paths.ts'
 
 export { TRAE_USAGE_PATH } from './status-paths.ts'
 export type { TraeWebUsage } from './status-paths.ts'
 
-/** Constructor dependencies. */
+/**
+ * Constructor dependencies. The model accessors are region-scoped: the CN and
+ * international apps expose different rosters, so the card must be served the
+ * directory of the signed-in account's own region (see region.ts).
+ */
 export interface TraeUsageRouteOptions {
   store: TraeCredentialStore
   client: TraeUsageClient
-  /** The last-refreshed Trae raw directory (one entry per upstream model) for card display. */
-  displayModels(): readonly TraeModelInfo[]
-  /** The user's model selection stored as model id (= Trae name). */
-  enabledModelIds(): readonly string[]
+  /** The region's last-refreshed raw directory (one entry per upstream model) for card display. */
+  displayModels(region: TraeRegion): readonly TraeModelInfo[]
+  /** The user's model selection in the region, stored as model id (= Trae name). */
+  enabledModelIds(region: TraeRegion): readonly string[]
   discoverModels?(signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
   rawDiagnostic?(): TraeRawDiagnostic
 }
@@ -121,14 +126,29 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWeb
   }
   // Only user-facing identity and expiry cross to the browser. Token material
   // and stable user IDs stay on the Host.
+  // Region drives which per-region model directory and selection this document
+  // reports, and which usage surface the credits block reads.
+  const region = regionOfCredential(credential)
   const account = {
     accountId: accounts.find(item => item.selected)?.id ?? '',
     accountName: credential.accountName ?? credential.userId,
     tokenExpiresAtMs: credential.expiresAtMs,
+    region,
     accounts,
-    models: deps.displayModels().map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
-    enabledModelIds: [...deps.enabledModelIds()],
+    models: deps.displayModels(region).map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
+    enabledModelIds: [...deps.enabledModelIds(region)],
     ...deps.rawDiagnostic === undefined ? {} : { rawChat: deps.rawDiagnostic() },
+  }
+  if (region === 'ai') {
+    // The international region is subscription-based: read its pay status
+    // instead of the CN Work-credit packs. A failure degrades to
+    // payStatusError, exactly like creditsError on the CN side.
+    try {
+      const payStatus = await deps.client.payStatus()
+      return { status: 'signed-in', ...account, payStatus }
+    } catch (error: unknown) {
+      return { status: 'signed-in', ...account, payStatusError: safeMessage(error) }
+    }
   }
   try {
     const snapshot = await deps.client.snapshot()

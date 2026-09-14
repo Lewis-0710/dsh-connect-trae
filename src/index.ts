@@ -401,11 +401,11 @@ export function apply(ctx: Context, config: Config): void {
   ctx.inject(['webServer'], (webCtx) => registerTraeUsageRoute(webCtx, {
     store,
     client: usageClient,
-    // Region-scoped accessors: the card sees the selected account's region.
-    // (The web-status interface itself grows explicit region parameters in a
-    // later stage; the closure already reads the tracked region here.)
-    displayModels: () => displayModels(current(), currentRegion),
-    enabledModelIds: () => regionStateOf(current(), currentRegion).enabledModelIds ?? [],
+    // Region-scoped accessors: the card is served the signed-in account's own
+    // region directory and selection, and the save writes back into that
+    // region's slot.
+    displayModels: region => displayModels(current(), region),
+    enabledModelIds: region => regionStateOf(current(), region).enabledModelIds ?? [],
     discoverModels,
     rawDiagnostic: () => rawDiagnostic(),
   }))

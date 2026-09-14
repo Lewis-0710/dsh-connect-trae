@@ -7,6 +7,7 @@ import {
   regionOfUserRegion,
 } from '../src/region.ts'
 import { regionStateOf } from '../src/index.ts'
+import { nextRegionSlots } from '../src/status-paths.ts'
 
 describe('regionOfEdition', () => {
   it('maps the four editions onto the two routing buckets', () => {
@@ -119,5 +120,29 @@ describe('regionStateOf (config bucket migration)', () => {
     expect('enabledModelIds' in state).toBe(false)
     expect('imageModelIds' in state).toBe(false)
     expect('contextBudgets' in state).toBe(false)
+  })
+})
+
+describe('nextRegionSlots (card save merge)', () => {
+  it('writes only the signed-in region and carries the other slot untouched', () => {
+    const existing = {
+      cn: { enabledModelIds: ['glm-5.2'], lastCatalog: [], imageModelIds: [], contextBudgets: { 'glm-5.2': 200_000 } },
+      ai: { enabledModelIds: ['gpt-5.4'], lastCatalog: [], imageModelIds: [], contextBudgets: {} },
+    }
+    const next = nextRegionSlots(existing, 'ai', {
+      lastCatalog: [{ id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview', input: ['text'] }],
+      enabledModelIds: ['gemini-3.1-pro'],
+      imageModelIds: [],
+      contextBudgets: {},
+    })
+    // The ai slot is the new write; the cn slot is carried byte-for-byte.
+    expect(next['ai']).toMatchObject({ enabledModelIds: ['gemini-3.1-pro'] })
+    expect(next['cn']).toEqual(existing['cn'])
+  })
+
+  it('tolerates an absent or malformed stored regions value', () => {
+    expect(nextRegionSlots(undefined, 'cn', { enabledModelIds: [] })).toEqual({ cn: { enabledModelIds: [] } })
+    expect(nextRegionSlots('garbage', 'ai', { enabledModelIds: [] })).toEqual({ ai: { enabledModelIds: [] } })
+    expect(nextRegionSlots([1, 2], 'cn', { enabledModelIds: [] })).toEqual({ cn: { enabledModelIds: [] } })
   })
 })

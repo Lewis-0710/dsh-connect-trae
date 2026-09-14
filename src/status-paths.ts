@@ -3,6 +3,7 @@
  * Mirrors the `dsh-workbuddy-connect` status-route pattern so the plugin card
  * stays consistent with that project's external presentation.
  */
+import type { TraeRegion } from './region.ts'
 
 /** Plugin-owned usage endpoint consumed by its browser half. */
 export const TRAE_USAGE_PATH = '/plugins/dsh-connect-trae/usage'
@@ -62,6 +63,8 @@ export interface TraeWebAccount {
   id: string
   accountName: string
   edition: 'cn' | 'sg' | 'solo' | 'solo-sg'
+  /** Routing bucket of this account, derived from its credential. */
+  region: TraeRegion
   source: 'desktop' | 'dsh' | 'cli'
   tokenExpiresAtMs: number
   selected: boolean
@@ -76,6 +79,38 @@ export interface TraeWebSearchPath {
   message?: string
 }
 
+/**
+ * Build the next `regions` settings value for the card's save. The write
+ * targets ONLY the signed-in account's region slot; every other region's slot
+ * is carried over untouched, so switching accounts never clobbers the other
+ * region's picks. Tolerates any stored shape (absent, non-object) by starting
+ * from an empty document.
+ */
+export function nextRegionSlots<Slot extends object>(
+  regions: unknown,
+  region: TraeRegion,
+  slot: Slot,
+): Record<string, unknown> {
+  const base = typeof regions === 'object' && regions !== null && !Array.isArray(regions)
+    ? regions as Record<string, unknown>
+    : {}
+  return { ...base, [region]: slot }
+}
+
+/** Subscription status of an international (ai) account, rendered instead of the CN credit packs. */
+export interface TraeWebPayStatus {
+  isDollarUsageBilling: boolean
+  hasPackage: boolean
+  isPayFreshman: boolean
+  inTrial: boolean
+  trialEndTimeMs: number
+  enableSoloLite: boolean
+  enableSoloBuilder: boolean
+  enableSoloCoder: boolean
+  enableSoloWeb: boolean
+  fission?: { startTimeMs: number; expireTimeMs: number; maxUsage: number }
+}
+
 /** The JSON document the plugin card renders. */
 export type TraeWebUsage =
   | { status: 'signed-out'; accounts: readonly TraeWebAccount[]; message?: string; searched?: readonly TraeWebSearchPath[] }
@@ -84,6 +119,8 @@ export type TraeWebUsage =
     accountId: string
     accountName: string
     tokenExpiresAtMs: number
+    /** Which per-region model directory and selection this account owns. */
+    region: TraeRegion
     accounts: readonly TraeWebAccount[]
     models: readonly TraeWebModel[]
     enabledModelIds: readonly string[]
@@ -94,5 +131,8 @@ export type TraeWebUsage =
     }
     credits?: TraeWebCredits
     creditsError?: string
+    /** Subscription status of an international account (region ai only). */
+    payStatus?: TraeWebPayStatus
+    payStatusError?: string
   }
   | { status: 'error'; message: string }
