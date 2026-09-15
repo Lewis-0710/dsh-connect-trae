@@ -106,6 +106,9 @@ function isFileMissing(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === 'ENOENT'
 }
 
+/** Prefix of the "no candidate exists on disk" error; see {@link resolveTraeIdentity}. */
+const STORAGE_MISSING_PREFIX = 'Trae storage was not found'
+
 /**
  * Try candidates in order and return the first that yields a valid identity;
  * fail hard only when none do. Mirrors the credential store's skip-missing
@@ -129,8 +132,109 @@ export async function pickTraeStorageIdentity(
     }
   }
   const tried = candidates.map(item => item.path).join(' or ')
-  if (!anyPresent) throw new Error(`Trae storage was not found (${tried})`)
+  if (!anyPresent) throw new Error(`${STORAGE_MISSING_PREFIX} (${tried})`)
   throw lastError instanceof Error ? lastError : new Error(`Trae identity could not be resolved (${tried})`)
+}
+
+/** CLI dotfile home per edition; the CLI keeps its own home, not an Application Support entry. */
+const CLI_HOME_BY_EDITION: Readonly<Record<TraeEdition, string>> = {
+  cn: '.trae-cn',
+  solo: '.trae-cn',
+  sg: '.trae',
+  'solo-sg': '.trae',
+}
+
+/**
+ * Deterministic identity for a machine that only has the Trae CLI (`traecli`).
+ *
+ * A CLI-only machine has no desktop `storage.json`, so the desktop identity
+ * reader has nothing to read — yet the request headers still need stable
+ * machine/device ids. Everything here comes from identifiers the CLI itself
+ * persists (never a per-request random value):
+ *
+ *   - `argv.json`'s `crash-reporter-id` — a stable per-install UUID the CLI
+ *     writes on first run; used directly as the device id.
+ *   - `builtin/ide_version.json`'s `version` — the CLI build, sent as
+ *     `x-app-version` (the desktop reader gets this from `product.json`).
+ *   - a SHA-256 over the device id, host name and user name for `machineId`,
+ *     matching the 64-char hex shape the official clients send.
+ *
+ * When `crash-reporter-id` is absent the device id falls back to the same
+ * hash (still deterministic). A machine with no CLI home at all keeps failing
+ * loudly — a fabricated identity is worse than a visible "not signed in".
+ */
+export async function readTraeCliIdentity(
+  edition: TraeEdition,
+  options: TraeIdentityReadOptions = {},
+): Promise<TraeIdentity> {
+  const platform = options.platform ?? process.platform
+  const home = options.home ?? homedir()
+  const env = options.env ?? process.env
+  const cliHome = join(home, CLI_HOME_BY_EDITION[edition])
+  const argv = await readJsonFile(join(cliHome, 'argv.json'))
+  const version = await readJsonFile(join(cliHome, 'builtin', 'ide_version.json'))
+  const crashReporterId = nonEmpty(argv?.['crash-reporter-id'])
+  const host = nonEmpty(env['HOSTNAME']) ?? await readHostname() ?? 'unknown-host'
+  const user = nonEmpty(env['USER']) ?? nonEmpty(env['USERNAME']) ?? 'unknown-user'
+  const deviceId = crashReporterId ?? createHash('sha256').update(`trae-cli\0${host}\0${user}`).digest('hex').slice(0, 32)
+  const machineId = createHash('sha256').update(`trae-cli-machine\0${deviceId}\0${host}`).digest('hex')
+  const appVersion = nonEmpty(version?.['version'])
+  const deviceCpu = cpus()[0]?.model.split(' ')[0]
+  const osVersion = `${platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : platform} ${release()}`
+  return {
+    edition,
+    machineId,
+    deviceId,
+    ...appVersion === undefined ? {} : { appVersion },
+    ...deviceCpu === undefined ? {} : { deviceCpu },
+    osVersion,
+    platform,
+  }
+}
+
+/** Read and parse a JSON file, tolerating absence and malformed content. */
+async function readJsonFile(path: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** OS host name, or undefined when unavailable. */
+async function readHostname(): Promise<string | undefined> {
+  try {
+    const { hostname } = await import('node:os')
+    return nonEmpty(hostname())
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Resolve the request identity for one region: the desktop storage identity
+ * when any desktop install exists, otherwise the CLI home's deterministic
+ * identity (see {@link readTraeCliIdentity}).
+ *
+ * This is the seam the WSL2 / CLI-only case needs: `traecli` writes its token
+ * to `~/.trae-cn/trae-jwt-token` and no `storage.json` exists anywhere, so
+ * desktop-only resolution used to fail every directory refresh and chat
+ * request even though the account itself was found.
+ */
+export async function resolveTraeIdentity(
+  candidates: readonly TraeStorageCandidate[],
+  edition: TraeEdition,
+  options: TraeIdentityReadOptions = {},
+): Promise<TraeIdentity> {
+  try {
+    return await pickTraeStorageIdentity(candidates, options)
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith(STORAGE_MISSING_PREFIX)) throw error
+    return readTraeCliIdentity(edition, options)
+  }
 }
 
 /** Headers derived from actual persisted identity, never a new random identity per request. */

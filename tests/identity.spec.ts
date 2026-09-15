@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { identityHeaders, pickTraeStorageIdentity, readTraeIdentity } from '../src/identity.ts'
+import { identityHeaders, pickTraeStorageIdentity, readTraeCliIdentity, readTraeIdentity, resolveTraeIdentity } from '../src/identity.ts'
 
 const cleanup: string[] = []
 afterEach(async () => { await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
@@ -118,5 +118,81 @@ describe('Trae persisted identity', () => {
       ],
       { platform: 'win32', home: root, env: {} },
     )).rejects.toThrow(/Trae storage was not found/)
+  })
+})
+
+describe('CLI-only identity (WSL2 / traecli machines)', () => {
+  /** A machine with only the Trae CLI home: no storage.json anywhere. */
+  async function cliOnlyHome(editionHome = '.trae-cn'): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'trae-cli-id-'))
+    cleanup.push(root)
+    await mkdir(join(root, editionHome, 'builtin'), { recursive: true })
+    await writeFile(join(root, editionHome, 'argv.json'), JSON.stringify({ 'crash-reporter-id': '7ac9d0d8-0810-43bc-870b-ffe2b51a8333', locale: 'zh-cn' }))
+    await writeFile(join(root, editionHome, 'builtin', 'ide_version.json'), JSON.stringify({ version: '1.0.31', releaseDate: '2026-07-06' }))
+    return root
+  }
+
+  it('derives a stable identity from the CLI home when no desktop storage exists', async () => {
+    const home = await cliOnlyHome()
+    const candidates = [{ edition: 'cn' as const, path: join(home, '.config', 'trae-cn', 'User', 'globalStorage', 'storage.json'), source: 'desktop' as const }]
+    const first = await resolveTraeIdentity(candidates, 'cn', { platform: 'linux', home, env: {} })
+    const second = await resolveTraeIdentity(candidates, 'cn', { platform: 'linux', home, env: {} })
+    // Deterministic: identical inputs never produce a new identity per request.
+    expect(first).toEqual(second)
+    // The device id is the CLI's own persisted crash-reporter UUID, and the
+    // machine id keeps the 64-char hex shape the official clients send.
+    expect(first.deviceId).toBe('7ac9d0d8-0810-43bc-870b-ffe2b51a8333')
+    expect(first.machineId).toMatch(/^[0-9a-f]{64}$/)
+    // The CLI build supplies the app version the desktop reader takes from product.json.
+    expect(first.appVersion).toBe('1.0.31')
+    expect(first.platform).toBe('linux')
+  })
+
+  it('still sends usable request headers for a CLI-only machine', async () => {
+    const home = await cliOnlyHome()
+    const identity = await readTraeCliIdentity('cn', { platform: 'linux', home, env: {} })
+    const headers = identityHeaders(identity)
+    expect(headers['x-machine-id']).toBe(identity.machineId)
+    expect(headers['x-device-id']).toBe('7ac9d0d8-0810-43bc-870b-ffe2b51a8333')
+    expect(headers['x-app-version']).toBe('1.0.31')
+    expect(headers['x-device-type']).toBe('linux')
+  })
+
+  it('stays deterministic when the CLI home has no crash-reporter id', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'trae-cli-noid-')); cleanup.push(root)
+    await mkdir(join(root, '.trae-cn'), { recursive: true })
+    const a = await readTraeCliIdentity('cn', { platform: 'linux', home: root, env: { USER: 'wsl-user' } })
+    const b = await readTraeCliIdentity('cn', { platform: 'linux', home: root, env: { USER: 'wsl-user' } })
+    expect(a.deviceId).toBe(b.deviceId)
+    expect(a.machineId).toBe(b.machineId)
+  })
+
+  it('prefers the desktop storage identity whenever one exists', async () => {
+    const home = await cliOnlyHome()
+    const storage = join(home, 'User', 'globalStorage', 'storage.json')
+    await mkdir(join(home, 'User', 'globalStorage'), { recursive: true })
+    await writeFile(storage, JSON.stringify({ 'telemetry.devDeviceId': 'desktop-device', 'telemetry.machineId': 'desktop-machine' }))
+    const identity = await resolveTraeIdentity([{ edition: 'cn', path: storage, source: 'desktop' }], 'cn', { platform: 'linux', home, env: {} })
+    expect(identity.deviceId).toBe('desktop-device')
+    expect(identity.machineId).toBe('desktop-machine')
+  })
+
+  it('reads the international CLI home for the ai region', async () => {
+    const home = await cliOnlyHome('.trae')
+    const identity = await readTraeCliIdentity('solo-sg', { platform: 'linux', home, env: {} })
+    expect(identity.appVersion).toBe('1.0.31')
+    expect(identity.deviceId).toBe('7ac9d0d8-0810-43bc-870b-ffe2b51a8333')
+  })
+
+  it('surfaces an existing-but-unparsable desktop file instead of masking it with the CLI identity', async () => {
+    const home = await cliOnlyHome()
+    const storage = join(home, 'User', 'globalStorage', 'storage.json')
+    await mkdir(join(home, 'User', 'globalStorage'), { recursive: true })
+    await writeFile(storage, '{broken')
+    // A corrupt file surfaces its own parse error rather than being silently
+    // replaced by the CLI identity (only a wholly ABSENT desktop install may
+    // fall back).
+    await expect(resolveTraeIdentity([{ edition: 'cn', path: storage, source: 'desktop' }], 'cn', { platform: 'linux', home, env: {} }))
+      .rejects.toThrow(/JSON|identity could not be resolved|stable machine identity/)
   })
 })
