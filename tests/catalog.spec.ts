@@ -29,11 +29,31 @@ describe('Trae catalog', () => {
   it('starts with identity-only fallback entries that default to text-only', () => {
     const catalog = new TraeCatalog()
     expect(catalog.current()).toEqual(FALLBACK_TRAE_MODELS)
-    expect(catalog.current().some(model => model.id === 'DeepSeek-V4-Flash')).toBe(true)
+    expect(catalog.current().some(model => model.id === 'DeepSeek-V4-Flash-Official')).toBe(true)
     expect(catalog.current().every(model => model.contextWindow === undefined)).toBe(true)
     expect(traeInputModalities(FALLBACK_TRAE_MODELS.find(model => model.id === 'glm-5.2')!)).toEqual(['text'])
     expect(traeInputModalities(FALLBACK_TRAE_MODELS.find(model => model.id === 'kimi-k2.6')!)).toEqual(['text'])
-    expect(traeInputModalities(FALLBACK_TRAE_MODELS.find(model => model.id === 'DeepSeek-V4-Pro')!)).toEqual(['text'])
+    expect(traeInputModalities(FALLBACK_TRAE_MODELS.find(model => model.id === 'DeepSeek-V4-Pro-Official')!)).toEqual(['text'])
+  })
+
+  it('serves only config_names the live wire roster actually accepts', () => {
+    // The fallback is served verbatim before the first refresh lands and is
+    // never run through `dropDeadModels`, so it must not advertise a row that
+    // `llm_utils_chat` would reject. `auto` was such a row: it is not a Trae
+    // config_name, so selecting it failed with 4001.
+    for (const region of ['cn', 'ai'] as const) {
+      for (const model of fallbackModelsFor(region)) {
+        expect(model.id).not.toBe('auto')
+        expect(model.id.trim()).not.toBe('')
+      }
+    }
+    // The verified CN roster uses the `-Official` suffix
+    // (docs/DS41_CALLABILITY.md); the bare names are not wire ids.
+    const cnIds = FALLBACK_TRAE_MODELS.map(model => model.id)
+    expect(cnIds).toContain('DeepSeek-V4-Flash-Official')
+    expect(cnIds).toContain('DeepSeek-V4-Pro-Official')
+    expect(cnIds).not.toContain('DeepSeek-V4-Flash')
+    expect(cnIds).not.toContain('DeepSeek-V4-Pro')
   })
 
   it('ignores uncertain upstream multimodal flags and keeps one text-only entry per model', () => {
@@ -176,7 +196,7 @@ describe('region-scoped fallback directories', () => {
     expect(FALLBACK_TRAE_MODELS.map(model => model.id)).not.toContain('gemini-3.1-pro')
     expect(FALLBACK_TRAE_MODELS.map(model => model.id)).not.toContain('gpt-5.4')
     expect(FALLBACK_TRAE_MODELS_AI.map(model => model.id)).not.toContain('glm-5.2')
-    expect(FALLBACK_TRAE_MODELS_AI.map(model => model.id)).not.toContain('DeepSeek-V4-Pro')
+    expect(FALLBACK_TRAE_MODELS_AI.map(model => model.id)).not.toContain('DeepSeek-V4-Pro-Official')
   })
 
   it('captures the verified international roster from the live directory', () => {
@@ -187,5 +207,47 @@ describe('region-scoped fallback directories', () => {
       'gemini-3.1-pro', 'gemini-3-flash-solo', 'minimax-m3', 'minimax-m2.7', 'kimi-k2.5', 'gpt-5.4', 'gpt-5.2',
     ])
     expect(FALLBACK_TRAE_MODELS_AI.every(model => model.input === undefined)).toBe(true)
+  })
+})
+
+describe('only callable models are ever served', () => {
+  // The catalog must never advertise a config_name that `llm_utils_chat`
+  // rejects with 4001. Two independent guarantees enforce that, and both are
+  // covered here:
+  //   1. the live merge drops any Remote row with no matching wire config
+  //      (`mergeTraeModelSources`);
+  //   2. the static fallback is written by hand from the verified roster and
+  //      is never filtered (filtering it would delete the safety net), so its
+  //      ids have to be correct at the source.
+  // The IDE-only models have no wire config on the SOLO channel, so they can
+  // never survive step 1 and must not be added to the fallback in step 2.
+  const IDE_ONLY = ['deepseek-v4.1-flash', 'glm-5.3-flash', 'kimi-k2.8-preview', 'qwen3.8-flash']
+
+  it('drops a remote row that has no matching wire config', () => {
+    const remote = [
+      { id: 'glm-5.2', name: 'GLM-5.2', multimodal: false, reasoningSupported: false },
+      // Advertised by the remote directory but absent from the wire roster:
+      // exactly the shape of a dead config_name such as Doubao-Seed-Code.
+      { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', multimodal: false, reasoningSupported: false },
+    ]
+    const merged = mergeTraeModelSources(remote, [{ id: 'glm-5.2', name: 'GLM-5.2' }])
+    expect(merged.map(model => model.id)).toEqual(['glm-5.2'])
+  })
+
+  it('never lists an IDE-only model in either fallback roster', () => {
+    for (const region of ['cn', 'ai'] as const) {
+      for (const model of fallbackModelsFor(region)) {
+        expect(IDE_ONLY).not.toContain(model.id)
+        expect(IDE_ONLY).not.toContain(model.name)
+      }
+    }
+  })
+
+  it('keeps every fallback id non-empty and unique', () => {
+    for (const region of ['cn', 'ai'] as const) {
+      const ids = fallbackModelsFor(region).map(model => model.id)
+      expect(ids.every(id => id.trim() !== '')).toBe(true)
+      expect(new Set(ids).size).toBe(ids.length)
+    }
   })
 })

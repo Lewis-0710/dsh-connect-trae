@@ -37,7 +37,7 @@ describe('Trae loopback shim', () => {
     const response = await fetch(`${shim.baseUrl()}/v1/models`, { headers: { authorization: `Bearer ${shim.token()}` } })
     expect(response.status).toBe(200)
     const body = await response.json() as { data: { id: string }[] }
-    expect(body.data.map(item => item.id)).toContain('auto')
+    expect(body.data.map(item => item.id)).toContain('DeepSeek-V4-Flash-Official')
   })
 
   it('rejects missing bearer and hostile Host', async () => {
@@ -71,7 +71,7 @@ describe('Trae loopback shim', () => {
     const response = await fetch(`${shim.baseUrl()}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${shim.token()}` },
-      body: JSON.stringify({ model: 'auto', messages: [] }),
+      body: JSON.stringify({ model: 'DeepSeek-V4-Flash-Official', messages: [] }),
     })
     expect(response.status).toBe(503)
     expect(await response.text()).toContain('protocol is not configured')

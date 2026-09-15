@@ -58,15 +58,17 @@ describe('Trae provider registration', () => {
       })
       expect(ctx.settings.describe().some(entry => entry.ns === Trae.TRAE_SETTINGS_NS)).toBe(true)
       const models = await ctx.llm.listModels('trae')
-      expect(models.map(model => model.id)).toContain('DeepSeek-V4-Flash')
-      expect(models.map(model => model.id)).toContain('DeepSeek-V4-Pro')
+      expect(models.map(model => model.id)).toContain('DeepSeek-V4-Flash-Official')
+      expect(models.map(model => model.id)).toContain('DeepSeek-V4-Pro-Official')
       expect(models.find(model => model.id === 'glm-5.2')?.inputModalities).toEqual(['text'])
       expect(models.find(model => model.id === 'kimi-k2.6')?.inputModalities).toEqual(['text'])
-      expect(models.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text'])
+      expect(models.find(model => model.id === 'DeepSeek-V4-Pro-Official')?.inputModalities).toEqual(['text'])
+      // No `auto` row: it is not a Trae config_name, so it could never be called.
+      expect(models.map(model => model.id)).not.toContain('auto')
       // The international provider serves its own fallback roster, not the CN one.
       const globalIds = (await ctx.llm.listModels('trae-global')).map(model => model.id)
       expect(globalIds.length).toBeGreaterThan(0)
-      expect(globalIds).not.toContain('DeepSeek-V4-Pro')
+      expect(globalIds).not.toContain('DeepSeek-V4-Pro-Official')
     } finally { await restore() }
   })
 
@@ -79,11 +81,11 @@ describe('Trae provider registration', () => {
     try {
       await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
 
-      await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { imageModelIds: ['DeepSeek-V4-Pro'] })
+      await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { imageModelIds: ['DeepSeek-V4-Pro-Official'] })
 
       const models = await ctx.llm.listModels('trae')
-      expect(models.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text', 'image'])
-      expect(models.find(model => model.id === 'DeepSeek-V4-Flash')?.inputModalities).toEqual(['text'])
+      expect(models.find(model => model.id === 'DeepSeek-V4-Pro-Official')?.inputModalities).toEqual(['text', 'image'])
+      expect(models.find(model => model.id === 'DeepSeek-V4-Flash-Official')?.inputModalities).toEqual(['text'])
     } finally { await restore() }
   })
 
@@ -129,7 +131,7 @@ describe('built-in fallback is a safety net, not a filter target', () => {
       await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
 
       const ids = (await ctx.llm.listModels('trae')).map(model => model.id)
-      for (const fallback of ['auto', 'DeepSeek-V4-Flash', 'DeepSeek-V4-Pro', 'glm-5.2', 'kimi-k2.6']) {
+      for (const fallback of ['DeepSeek-V4-Flash-Official', 'DeepSeek-V4-Pro-Official', 'glm-5.2', 'kimi-k2.6']) {
         expect(ids).toContain(fallback)
       }
     } finally { await restore() }
@@ -199,7 +201,7 @@ describe('per-region model slots', () => {
       const cnIds = (await ctx.llm.listModels('trae')).map(model => model.id)
       expect(cnIds).not.toContain('gemini-3.1-pro')
       expect(cnIds).not.toContain('gpt-5.4')
-      for (const fallback of ['auto', 'DeepSeek-V4-Flash', 'glm-5.2']) {
+      for (const fallback of ['DeepSeek-V4-Flash-Official', 'glm-5.2']) {
         expect(cnIds).toContain(fallback)
       }
     } finally { await restore() }
@@ -242,13 +244,13 @@ describe('per-region model slots', () => {
       await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae-global')
 
       // The legacy flat image opt-in is CN-only state.
-      await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { imageModelIds: ['DeepSeek-V4-Pro'] })
+      await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { imageModelIds: ['DeepSeek-V4-Pro-Official'] })
 
       const cnModels = await ctx.llm.listModels('trae')
-      expect(cnModels.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text', 'image'])
+      expect(cnModels.find(model => model.id === 'DeepSeek-V4-Pro-Official')?.inputModalities).toEqual(['text', 'image'])
       // The international provider's own directory carries no such opt-in.
       const globalModels = await ctx.llm.listModels('trae-global')
-      expect(globalModels.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities ?? []).not.toContain('image')
+      expect(globalModels.find(model => model.id === 'DeepSeek-V4-Pro-Official')?.inputModalities ?? []).not.toContain('image')
     } finally { await restore() }
   })
 })

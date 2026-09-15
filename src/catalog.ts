@@ -27,11 +27,24 @@ export interface TraeModelInfo {
   wireFunction?: string
 }
 
-/** Bootstrap catalog: identity only where current Trae metadata has not been fetched yet. */
+/**
+ * Bootstrap catalog: identity only where current Trae metadata has not been
+ * fetched yet.
+ *
+ * Every id here must be a `config_name` that `llm_utils_chat` actually accepts,
+ * because this list is served verbatim before the first live refresh lands and
+ * it is NOT filtered against the wire map (the wire map can only confirm ids it
+ * happens to know, so filtering would delete the safety net exactly when it is
+ * needed — see `fallbackModels` in index.ts). The current CN roster was
+ * verified against the live remote directory on 2026-09-15
+ * (docs/DS41_CALLABILITY.md): `DeepSeek-V4-Flash-Official` and
+ * `DeepSeek-V4-Pro-Official` carry the `-Official` suffix, and there is no
+ * `auto` config_name — an `auto` row was previously served here and would have
+ * failed on selection.
+ */
 export const FALLBACK_TRAE_MODELS: readonly TraeModelInfo[] = [
-  { id: 'auto', name: 'Auto' },
-  { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash' },
-  { id: 'DeepSeek-V4-Pro', name: 'DeepSeek-V4-Pro' },
+  { id: 'DeepSeek-V4-Flash-Official', name: 'DeepSeek-V4-Flash' },
+  { id: 'DeepSeek-V4-Pro-Official', name: 'DeepSeek-V4-Pro' },
   { id: 'glm-5.2', name: 'GLM-5.2' },
   { id: 'kimi-k2.6', name: 'Kimi-K2.6' },
 ]
@@ -128,8 +141,8 @@ function displayKey(name: string): string {
  *
  * Joining is two-tier, in priority order:
  *  1. `wire.id` (the `config_name`) equals the remote id — the model's display
- *     id is already its wire id (the common case: glm-5.2, DeepSeek-V4-Flash,
- *     kimi-k3, …).
+ *     id is already its wire id (the common case: glm-5.2,
+ *     DeepSeek-V4-Flash-Official, kimi-k3, …).
  *  2. `wire.name` (the `display_name`) equals the remote display name — for
  *     models whose display id differs from the wire id across Trae versions.
  * When the matched wire `config_name` differs from the remote id it is recorded
