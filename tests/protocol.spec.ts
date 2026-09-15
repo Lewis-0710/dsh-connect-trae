@@ -84,7 +84,15 @@ describe('Trae CN protocol draft', () => {
     expect(normalizeTraeVersionCode('')).toBe(TRAE_VERSION_CODE_FALLBACK)
   })
 
-  it('refuses to reuse the CN request contract for SG', () => {
-    expect(() => buildTraeCnHeaders({ ...credential, edition: 'sg' }, { ...identity, edition: 'sg' })).toThrow(/not verified/)
+  it('serves international editions with the same verified header shape', () => {
+    // The identical header set is accepted by the international gateway
+    // (verified read-only 2026-09-15, docs/INTL_SG_EVIDENCE.md §2.3), so the
+    // SG editions no longer throw; only the wire endpoints are region-scoped.
+    for (const edition of ['sg', 'solo-sg'] as const) {
+      const headers = buildTraeCnHeaders({ ...credential, edition }, { ...identity, edition })
+      expect(headers['X-Ide-Token']).toBe('secret-access')
+      expect(headers['x-app-id']).toBe('6eefa01c-1036-4c7e-9ca5-d891f63bfcd8')
+      expect(headers['x-plugin-channel']).toBe('icube-ai')
+    }
   })
 })

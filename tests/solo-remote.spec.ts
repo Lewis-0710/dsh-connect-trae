@@ -36,3 +36,22 @@ describe('TraeSoloRemoteCatalogClient', () => {
     expect('chat' in client).toBe(false)
   })
 })
+
+describe('region-scoped directory gateway', () => {
+  it('routes an international credential to coresg with its portal headers', async () => {
+    const intlCredential: TraeCredential = {
+      accessToken: 'token', userId: 'uid', host: 'https://growsg-normal.trae.ai', userRegion: 'SG',
+      expiresAtMs: Date.now() + 1000, edition: 'solo-sg', source: 'desktop',
+    }
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ code: 0, data: { list: [
+      { function: 'solo_agent_remote', models: [{ name: 'gpt-5.4', display_name: 'GPT-5.4', multimodal: true }] },
+    ] } }), { status: 200 }))
+    const client = new TraeSoloRemoteCatalogClient({ credential: async () => intlCredential, fetchImpl: fetchImpl as unknown as typeof fetch })
+    await expect(client.fetchModels()).resolves.toHaveLength(1)
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://coresg-normal.trae.ai/api/remote/v1/models?functions=solo_agent_remote,solo_work_remote')
+    const headers = (fetchImpl.mock.calls[0]?.[1] as RequestInit).headers as Record<string, string>
+    expect(headers['Referer']).toBe('https://coresg-normal.trae.ai/')
+    expect(headers['x-preferenced-language']).toBe('en')
+    expect(headers['x-trae-user-timezone']).toBe('Asia/Singapore')
+  })
+})

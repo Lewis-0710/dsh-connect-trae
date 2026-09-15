@@ -4,13 +4,23 @@ import * as dshSettings from '@deepseek-ai/dsh-settings'
 import type { SettingsSectionHooks } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
+import {
+  createTraeAdapter,
+  regionOfTraeProvider,
+  TRAE_AI_PROVIDER,
+  TRAE_PROVIDER,
+  TRAE_PROVIDER_DISPLAY_NAMES,
+  TRAE_PROVIDERS,
+} from './adapter.ts'
+import type { TraeAdapter } from './adapter.ts'
 import { TraeCredentialStore } from './auth.ts'
 import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, formatTraeModelDisplayName, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential } from './refresh.ts'
 import { pickTraeStorageIdentity, readTraeIdentity } from './identity.ts'
-import { traeStorageCandidates } from './paths.ts'
+import { traeStorageCandidates, type TraeEdition } from './paths.ts'
+import { regionOfCredential, regionOfEdition, regionOfHost, regionOfUserRegion, REGION_GATEWAYS, type TraeRegion, type TraeRegionGateways } from './region.ts'
 import { createTraeShim } from './shim.ts'
+import type { TraeShim } from './shim.ts'
 import { TraeSoloUpstreamClient } from './solo.ts'
 import { TraeSoloBridge } from './solo-bridge.ts'
 import { TraeSoloRemoteCatalogClient } from './solo-remote.ts'
@@ -48,7 +58,7 @@ export { TraeRawCapabilityController, type TraeRawCapabilityControllerOptions } 
 export { TraeFallbackUpstreamClient, type TraeFallbackUpstreamOptions } from './fallback-upstream.ts'
 export { TraeGatedUpstreamClient, type TraeGatedUpstreamOptions } from './gated-upstream.ts'
 export { applyReasoningEffort, parseReasoningCapability, TRAE_REASONING_EFFORTS, type TraeReasoningCapability, type TraeReasoningEffort } from './reasoning.ts'
-export { refreshTraeCredential } from './refresh.ts'
+export { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
 export { decodeTraeEvent, SseDecoder, type SseEvent, type TraeStreamEvent } from './sse.ts'
 export { prepareSoloBody, TraeSoloUpstreamClient, TRAE_SOLO_CHAT_PATH, TRAE_SOLO_FUNCTION, TRAE_SOLO_MODELS_PATH, type TraeSoloClientOptions } from './solo.ts'
 export { bridgeTraeSoloStream, TraeSoloBridge } from './solo-bridge.ts'
@@ -56,7 +66,17 @@ export { TraeSoloRemoteCatalogClient, TRAE_SOLO_REMOTE_BASE, type TraeSoloRemote
 export { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
 export { TRAE_PAY_BASE, TraeUsageClient, type TraeActivityRule, type TraeCheckinStatus, type TraeUsageOptions, type TraeUsagePack, type TraeUsageSnapshot, type TraeUsageSummary, type TraeUsageView } from './usage.ts'
 export { registerTraeUsageRoute, traeWebUsage, type TraeUsageRouteOptions } from './web-status.ts'
-export { TRAE_USAGE_PATH, type TraeWebActivity, type TraeWebCheckin, type TraeWebCredits, type TraeWebUsage } from './status-paths.ts'
+export {
+  regionOfTraeStatusUrl,
+  TRAE_REGION_PARAM,
+  TRAE_REGIONS,
+  TRAE_USAGE_PATH,
+  withTraeRegion,
+  type TraeWebActivity,
+  type TraeWebCheckin,
+  type TraeWebCredits,
+  type TraeWebUsage,
+} from './status-paths.ts'
 export { createTraeShim, type TraeShim } from './shim.ts'
 export { UnconfiguredTraeUpstreamClient, type TraeChatResult, type TraeUpstreamClient } from './upstream.ts'
 
@@ -72,21 +92,74 @@ export const inject = ['llm']
  */
 export const TRAE_SETTINGS_NS = 'trae'
 
+/** One region's saved model state: its own directory and the user's selection within it. */
+export interface TraeRegionState {
+  /** The last-refreshed raw directory for this region; what the card displays. */
+  lastCatalog?: TraeModelInfo[]
+  /** The user's selection in this region, as model ids (= Trae name). */
+  enabledModelIds?: string[]
+  /** Models the user explicitly enabled for image input in this region. */
+  imageModelIds?: string[]
+  /** Local DSH context budget per model in this region. */
+  contextBudgets?: Record<string, number>
+}
+
 export interface Config {
   authFile?: string
   edition?: 'auto' | 'cn' | 'sg' | 'solo' | 'solo-sg'
-  /** Stable local account selector; tokens remain outside settings. */
+  /**
+   * @deprecated Legacy single-slot account selector from before the dual
+   * provider split. It is attributed to whichever region the account actually
+   * belongs to (resolved once at startup from the local account scan); new
+   * writes go to {@link Config.accounts}.
+   */
   accountId?: string
-  /** The last-refreshed Trae raw directory; what the plugin card displays. */
+  /**
+   * Per-region account selections, keyed `cn` | `ai`. Each region's tab writes
+   * its own slot; tokens remain outside settings.
+   */
+  accounts?: Partial<Record<TraeRegion, string>>
+  /**
+   * Per-region model state, keyed `cn` | `ai`. The CN and international apps
+   * expose different rosters, so each keeps its own directory and selection
+   * and switching accounts never drops the other region's picks.
+   */
+  regions?: Partial<Record<TraeRegion, TraeRegionState>>
+  /**
+   * @deprecated Legacy single-slot fields from before the region split. They
+   * predate international support and are read as the CN region's state when
+   * `regions.cn` is absent; new writes go to `regions`.
+   */
   lastCatalog?: TraeModelInfo[]
-  /** The user's ordinary-model selection, as model id (= Trae name). */
+  /** @deprecated See {@link Config.lastCatalog}. */
   enabledModelIds?: string[]
-  /** Local DSH context budget per model; a value may only select an advertised window. */
+  /** @deprecated See {@link Config.lastCatalog}. */
   contextBudgets?: Record<string, number>
-  /** Models the user explicitly enabled for image input; text is always enabled. */
+  /** @deprecated See {@link Config.lastCatalog}. */
   imageModelIds?: string[]
-  /** Legacy generated runtime catalog; kept for backwards compatibility. */
+  /** @deprecated Legacy generated runtime catalog; kept for backwards compatibility. */
   models?: TraeModelInfo[]
+}
+
+/**
+ * One region's saved state. A config written before the region split has only
+ * the flat fields: those were always captured from the CN endpoint (the
+ * plugin had no international support), so they are read as the CN state and
+ * only when no explicit CN slot exists. The ai region never inherits them —
+ * that inheritance is exactly the bug where a stale CN directory would be
+ * intersected with the international catalog and silently drop the user's
+ * picks (the same failure workbuddy fixed with its region split).
+ */
+export function regionStateOf(config: Config, region: TraeRegion): TraeRegionState {
+  const stored = config.regions?.[region]
+  if (stored !== undefined) return stored
+  if (region !== 'cn') return {}
+  return {
+    ...config.lastCatalog === undefined ? {} : { lastCatalog: config.lastCatalog },
+    ...config.enabledModelIds === undefined ? {} : { enabledModelIds: config.enabledModelIds },
+    ...config.imageModelIds === undefined ? {} : { imageModelIds: config.imageModelIds },
+    ...config.contextBudgets === undefined ? {} : { contextBudgets: config.contextBudgets },
+  }
 }
 
 const modelConfig = z.object({
@@ -102,40 +175,94 @@ const modelConfig = z.object({
   wireConfigName: z.string(),
 })
 
+const regionStateConfig = z.object({
+  lastCatalog: z.array(modelConfig).default([]),
+  enabledModelIds: z.array(z.string()).default([]),
+  imageModelIds: z.array(z.string()).default([]),
+  contextBudgets: z.dict(z.number().step(1).min(1)).default({}),
+})
+
+const accountSelectionConfig = z.object({
+  cn: z.string().description('Selected domestic (CN) account id (never a token)'),
+  ai: z.string().description('Selected international account id (never a token)'),
+})
+
 export const Config: z<Config> = z.object({
   authFile: z.string().description('Optional Trae storage.json path override'),
   edition: z.union(['auto', 'cn', 'sg', 'solo', 'solo-sg']).default('auto').description('Trae edition hint'),
-  accountId: z.string().description('Selected local Trae account id (never a token)'),
-  lastCatalog: z.array(modelConfig).description('Last refreshed Trae raw model directory shown by the plugin card') as z<TraeModelInfo[]>,
-  enabledModelIds: z.array(z.string()).default([]).description('Trae model ids the user enabled'),
-  contextBudgets: z.dict(z.number().step(1).min(1)).default({}).description('Local DSH context budget per Trae model'),
-  imageModelIds: z.array(z.string()).default([]).description('Trae model ids the user explicitly enabled for image input'),
+  accountId: z.string().description('Deprecated: pre-split account selector, attributed to its own region'),
+  accounts: accountSelectionConfig.description('Per-region account selections, keyed cn | ai'),
+  regions: z.dict(regionStateConfig).default({}).description('Per-region model directory and selection, keyed cn | ai'),
+  lastCatalog: z.array(modelConfig).description('Deprecated: pre-region-split CN model directory') as z<TraeModelInfo[]>,
+  enabledModelIds: z.array(z.string()).default([]).description('Deprecated: pre-region-split CN selection'),
+  contextBudgets: z.dict(z.number().step(1).min(1)).default({}).description('Deprecated: pre-region-split CN context budgets'),
+  imageModelIds: z.array(z.string()).default([]).description('Deprecated: pre-region-split CN image opt-in'),
   models: z.array(modelConfig).description('Legacy generated Trae model list') as z<TraeModelInfo[]>,
 })
 
+/** Every region, in card tab order. */
+const REGION_KEYS: readonly TraeRegion[] = ['cn', 'ai']
+
+/**
+ * One region's complete runtime stack: its own credential store, model
+ * catalog, wire map, upstream clients, and loopback shim. The two regions are
+ * fully parallel provider stacks, so a domestic and an international account
+ * serve simultaneously and a change on one side (account switch, catalog
+ * refresh) never touches the other.
+ */
+interface TraeRegionStack {
+  region: TraeRegion
+  store: TraeCredentialStore
+  catalog: TraeCatalog
+  shim: TraeShim
+  delegating: TraeDelegatingUpstreamClient
+  usageClient: TraeUsageClient
+  /** Re-read this region's live directory from the upstream. */
+  discoverModels(signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
+  /** Rebuild the adapter snapshot after `catalog.set`; no-op before registration. */
+  invalidateAdapter: () => void
+  /** Raw-Chat capability state for this region's card route. */
+  rawDiagnostic: () => TraeRawDiagnostic
+}
+
 export function apply(ctx: Context, config: Config): void {
-  const catalog = new TraeCatalog()
-  const enabledSet = (value: Config): ReadonlySet<string> => new Set(value.enabledModelIds ?? [])
-  const imageSet = (value: Config): ReadonlySet<string> => new Set(value.imageModelIds ?? [])
-  // Display keys (lowercased id AND name) of every model known to be callable
-  // via `llm_utils_chat`, populated once `discoverModels` merges Remote with
-  // `get_detail_param`. A model whose id and name are both absent here is a dead
-  // config_name (Remote advertises it, `get_detail_param` has no match, e.g.
-  // `Doubao-Seed-Code` / `glm-5.3`) and must never be served — even from a stale
-  // saved `lastCatalog` / `models` / `enabledModelIds` that still lists it.
-  const callableKeys = new Set<string>()
-  // Whether discovery has actually produced a directory this run. Only a
-  // completed merge may filter anything: an empty `callableKeys` means "no wire
-  // answer yet" (no credentials, startup discovery failed or still in flight)
-  // and must not be read as "nothing is callable".
-  let wireResolved = false
-  // Drop dead rows from a (possibly stale) saved directory. No-op when the wire
-  // map has not been resolved yet, so a transient network failure never hides
-  // the whole catalog.
-  const dropDeadModels = (rows: readonly TraeModelInfo[]): readonly TraeModelInfo[] => {
-    if (!wireResolved) return rows
+  let current = () => config
+  const enabledSet = (value: Config, region: TraeRegion): ReadonlySet<string> => new Set(regionStateOf(value, region).enabledModelIds ?? [])
+  const imageSet = (value: Config, region: TraeRegion): ReadonlySet<string> => new Set(regionStateOf(value, region).imageModelIds ?? [])
+  /**
+   * Per-region wire state. Each region's discovery owns its own maps: the CN
+   * and international rosters overlap (and spell some ids differently), so a
+   * shared map would let one region's answer filter the other region's
+   * catalog. Display keys (lowercased id AND name) of every model known to be
+   * callable via `llm_utils_chat` are recorded by that region's discovery; a
+   * model whose id and name are both absent is a dead config_name (Remote
+   * advertises it, `get_detail_param` has no match, e.g. `Doubao-Seed-Code` /
+   * `glm-5.3`) and must never be served — even from a stale saved
+   * `lastCatalog` / `models` / `enabledModelIds` that still lists it.
+   */
+  const wireState = {} as Record<TraeRegion, {
+    callableKeys: Set<string>
+    /**
+     * Whether discovery has actually produced a directory this run. Only a
+     * completed merge may filter anything: an empty `callableKeys` means "no
+     * wire answer yet" (no credentials, startup discovery failed or still in
+     * flight) and must not be read as "nothing is callable".
+     */
+    resolved: boolean
+    byId: Map<string, string>
+    byName: Map<string, string>
+  }>
+  for (const region of REGION_KEYS) {
+    wireState[region] = { callableKeys: new Set(), resolved: false, byId: new Map(), byName: new Map() }
+  }
+  // Drop dead rows from a (possibly stale) saved directory. No-op when that
+  // region's wire map has not been resolved yet, so a transient network
+  // failure never hides the whole catalog.
+  const dropDeadModels = (rows: readonly TraeModelInfo[], region: TraeRegion): readonly TraeModelInfo[] => {
+    const wire = wireState[region]
+    if (!wire.resolved) return rows
     return rows.filter(model =>
-      callableKeys.has(model.id.trim().toLowerCase()) || callableKeys.has(model.name.trim().toLowerCase()))
+      wire.callableKeys.has(model.id.trim().toLowerCase()) || wire.callableKeys.has(model.name.trim().toLowerCase()))
   }
   // Runtime catalog derives from the last-refreshed raw directory plus the
   // user's selection and context budgets. Legacy `models` and pre-budget
@@ -148,165 +275,276 @@ export function apply(ctx: Context, config: Config): void {
   // live wire map can only ever confirm the ids it happens to know, and
   // filtering against it would let a partial catalog delete the safety net
   // precisely when it is needed. Its ids are the well-known Trae model names.
-  const fallbackModels = (value: Config): readonly TraeModelInfo[] =>
-    applyImageSelection(FALLBACK_TRAE_MODELS, imageSet(value))
-  const derive = (value: Config, raw: readonly TraeModelInfo[]): readonly TraeModelInfo[] => {
-    const selectedImages = imageSet(value)
-    const derived = deriveCatalog(applyImageSelection(sanitizeCatalog(dropDeadModels(raw)), selectedImages), enabledSet(value), value.contextBudgets ?? {})
-    return derived.length > 0 ? derived : fallbackModels(value)
+  // Region-scoped: the two regions expose different rosters, so an account
+  // must never see the other region's fallback list.
+  const fallbackModels = (value: Config, region: TraeRegion): readonly TraeModelInfo[] =>
+    applyImageSelection(fallbackModelsFor(region), imageSet(value, region))
+  const derive = (value: Config, raw: readonly TraeModelInfo[], region: TraeRegion): readonly TraeModelInfo[] => {
+    const selectedImages = imageSet(value, region)
+    const derived = deriveCatalog(applyImageSelection(sanitizeCatalog(dropDeadModels(raw, region)), selectedImages), enabledSet(value, region), regionStateOf(value, region).contextBudgets ?? {})
+    return derived.length > 0 ? derived : fallbackModels(value, region)
   }
-  const configuredModels = (value: Config): readonly TraeModelInfo[] =>
-    value.lastCatalog?.length ? derive(value, value.lastCatalog)
-      : value.models?.length ? derive(value, value.models)
-        : fallbackModels(value)
-  // What the plugin card displays: the last-refreshed raw directory, so the
-  // user re-reads the current Trae catalog rather than a stale saved snapshot.
-  const displayModels = (value: Config): readonly TraeModelInfo[] =>
-    value.lastCatalog?.length ? dropDeadModels(sanitizeCatalog(value.lastCatalog))
-      : value.models?.length ? dropDeadModels(sanitizeCatalog(value.models))
-        : FALLBACK_TRAE_MODELS
-  const store = new TraeCredentialStore({
-    ...config.authFile === undefined ? {} : { storagePath: config.authFile },
-    edition: config.edition ?? 'auto',
-    ...config.accountId === undefined ? {} : { accountId: config.accountId },
-    refresh: credential => refreshTraeCredential(credential),
-  })
-  const identity = async () => {
-    // Pick the first CN/SOLO candidate whose storage file actually exists,
-    // mirroring the credential store's skip-missing semantics. Windows machines
-    // often install only SOLO, so pinning the first (cn) candidate and reading a
-    // missing file used to throw ENOENT and break every refresh/chat request.
-    const candidates = config.authFile === undefined
-      ? traeStorageCandidates().filter(item => item.source === 'desktop' && (item.edition === 'cn' || item.edition === 'solo') && (config.edition === undefined || config.edition === 'auto' || item.edition === config.edition))
-      : [{ edition: config.edition === undefined || config.edition === 'auto' ? 'solo' as const : config.edition, path: config.authFile, source: 'desktop' as const }]
-    if (candidates.length === 0) throw new Error('Trae storage was not found')
-    return pickTraeStorageIdentity(candidates)
+  // Runtime catalog for one region: that region's saved directory (explicit
+  // slot, else the pre-split flat fields which are CN-only), else the legacy
+  // `models` list (also CN-only), else the region's fallback.
+  const configuredModels = (value: Config, region: TraeRegion): readonly TraeModelInfo[] => {
+    const state = regionStateOf(value, region)
+    return state.lastCatalog?.length ? derive(value, state.lastCatalog, region)
+      : region === 'cn' && value.models?.length ? derive(value, value.models, region)
+        : fallbackModels(value, region)
   }
-  const solo = new TraeSoloUpstreamClient({
-    credential: () => store.resolve(),
-    identity,
-    baseUrl: 'https://trae-api-cn.mchost.guru',
-    log: (message, detail) => ctx.logger.warn(message, detail),
-  })
-  const remoteCatalog = new TraeSoloRemoteCatalogClient({ credential: () => store.resolve() })
-  // Keep the native llm_utils_chat bridge as the only chat route: unlike the
-  // polling Remote session API, it preserves Trae's structured tool_calls so
-  // DSH can execute local read/write/bash tools and continue the agent loop.
-  // A wire resolver maps each display model id to its real llm_utils_chat
-  // config_name. It is populated once at startup from get_detail_param and
-  // never depends on a user-refreshed or re-saved directory, so Seed-Code and
-  // other models whose wire id differs from the display id resolve correctly
-  // even on a fresh install.
-  const wireById = new Map<string, string>()
-  const wireByName = new Map<string, string>()
-  const wireResolver = (displayId: string): string | undefined =>
-    wireById.get(displayId) ?? wireByName.get(displayId.trim().toLowerCase())
-  const upstream = new TraeSoloBridge(solo, catalog, wireResolver)
-  // The shim always sees a stable client; the Raw gateway may replace the
-  // delegate asynchronously, but it stays disabled until a probe succeeds.
-  const delegating = new TraeDelegatingUpstreamClient(upstream)
-  const shim = createTraeShim({ catalog, client: delegating, logger: ctx.logger })
-  let rawDiagnostic = (): TraeRawDiagnostic => ({ state: 'disabled' })
-  void (async () => {
-    try {
-      const probeModel = 'qwen-3.7-plus'
-      const { identity, runtime } = await resolveTraeRawRuntime(store, probeModel)
-      const rawClient = new TraeRawChatUpstreamClient({
-        credential: () => store.resolve(),
-        identity: async () => identity,
-        config: { model: runtime.modelName, configName: runtime.configName, passBackReasoning: true, runtime },
-        baseUrl: 'https://trae-api-cn.mchost.guru',
-      })
-      const gateway = createTraeRawGateway({
-        raw: rawClient,
-        solo: upstream,
-        endpoint: 'https://trae-api-cn.mchost.guru/api/ide/v2/llm_raw_chat',
-        edition: identity.edition,
-        identity: { appVersion: identity.appVersion ?? '', buildVersion: identity.buildVersion ?? '' },
-        runtime,
-        // Raw Chat stays opt-in and unverified; SOLO remains the only live path.
-        enabled: false,
-      })
-      delegating.replace(gateway.upstream)
-      rawDiagnostic = () => gateway.diagnostic()
-      ctx.effect(() => () => gateway.invalidate(), 'dsh-connect-trae: Raw capability invalidation')
-    } catch (error: unknown) {
-      ctx.logger.warn('dsh-connect-trae: Raw gateway unavailable; continuing with native SOLO tool-call channel', error)
-    }
-  })()
+  // What the plugin card displays: the region's last-refreshed raw directory,
+  // so the user re-reads the current Trae catalog rather than a stale snapshot.
+  const displayModels = (value: Config, region: TraeRegion): readonly TraeModelInfo[] => {
+    const state = regionStateOf(value, region)
+    return state.lastCatalog?.length ? dropDeadModels(sanitizeCatalog(state.lastCatalog), region)
+      : region === 'cn' && value.models?.length ? dropDeadModels(sanitizeCatalog(value.models), region)
+        : fallbackModelsFor(region)
+  }
+  /**
+   * Legacy migration for the pre-split single `accountId`: its region is
+   * resolved once from the local account scan and the selection is then
+   * attributed to that region ONLY — the other region keeps its documented
+   * default (first discovered account of that region) instead of silently
+   * inheriting a selection that belongs to the other side of the split.
+   */
+  let legacyAccountRegion: TraeRegion | undefined
+  const effectiveAccountFor = (region: TraeRegion, value: Config): string | undefined => {
+    const explicit = value.accounts?.[region]
+    if (explicit !== undefined) return explicit
+    return legacyAccountRegion === region ? value.accountId : undefined
+  }
 
-  // Read-only usage/credit summary served to the browser half. Optional on the
-  // `webServer` seam; absent in headless runs, the host provider still works.
-  //
-  // Account selection is strictly the user's choice: the store resolves the
-  // explicitly selected `accountId` verbatim, and only falls back to the first
-  // discovered account when nothing has been selected yet. The plugin must NOT
-  // silently switch to a different account that happens to have general credits
-  // — that would bill the wrong account against the user's intent.
-  const usageClient = new TraeUsageClient({ credential: () => store.resolve() })
-  let current = () => config
-  let invalidateAdapter = (): void => {}
-  const discoverModels = async (signal?: AbortSignal): Promise<readonly TraeModelInfo[]> => {
-    // The Remote /models directory is the model skeleton (display id, name,
-    // context, credit, reasoning). get_detail_param only supplies the real
-    // llm_utils_chat config_name for models whose display id differs from the
-    // wire id (e.g. Seed-Code); it does not define the catalog itself.
-    const [remote, wire] = await Promise.all([
-      remoteCatalog.fetchModels(signal),
-      solo.fetchModels(signal),
-    ])
-    const merged = mergeTraeModelSources(remote, wire)
-    // Record every callable display key (id and name) so stale saved catalogs
-    // are filtered against the live wire map and dead config_names cannot be
-    // resurrected from an old `lastCatalog` / `models` / `enabledModelIds`.
-    callableKeys.clear()
-    for (const model of merged) {
-      callableKeys.add(model.id.trim().toLowerCase())
-      callableKeys.add(model.name.trim().toLowerCase())
+  const stacks = {} as Record<TraeRegion, TraeRegionStack>
+  for (const region of REGION_KEYS) {
+    const catalog = new TraeCatalog(region)
+    const wire = wireState[region]
+    /**
+     * Best-effort device identity for this region's installation. Prefer the
+     * selected credential's own edition so an international account reads its
+     * own installation's identity (machine/device ids are per-install),
+     * mirroring the credential store's account binding; the explicit `edition`
+     * config still wins as the user's own narrowing. Candidates are then
+     * narrowed to THIS region's editions, so the CN stack can never read an
+     * international install's identity (and vice versa).
+     */
+    const identity = async () => {
+      let preferred: TraeEdition | undefined
+      try { preferred = (await store.current())?.edition } catch { /* fall through to every candidate */ }
+      const explicit = config.edition !== undefined && config.edition !== 'auto' ? config.edition : undefined
+      const hint = explicit ?? preferred
+      // Pick the first desktop candidate whose storage file actually exists,
+      // mirroring the credential store's skip-missing semantics. Windows
+      // machines often install only SOLO, so pinning the first (cn) candidate
+      // and reading a missing file used to throw ENOENT and break every
+      // refresh/chat request.
+      const candidates = config.authFile === undefined
+        ? traeStorageCandidates().filter(item => item.source === 'desktop'
+          && (hint !== undefined ? item.edition === hint : regionOfEdition(item.edition) === region))
+        : [{ edition: hint ?? (region === 'ai' ? 'sg' as const : 'solo' as const), path: config.authFile, source: 'desktop' as const }]
+      if (candidates.length === 0) throw new Error('Trae storage was not found')
+      return pickTraeStorageIdentity(candidates)
     }
-    // Mark the wire map authoritative only once a merge produced rows. A live
-    // Trae account that reports only part of the catalog (or an edition whose
-    // `/models` list is a subset) would otherwise let this filter delete every
-    // model it did not mention — including the built-in fallback set, which
-    // Remote never advertised and so can never appear in `callableKeys`.
-    wireResolved = merged.length > 0
-    // Populate the startup wire resolver (display id and display name → wire
-    // config_name) so the chat bridge resolves the real config_name even when
-    // the persisted catalog lacks `wireConfigName` (the settings schema drops
-    // unknown fields on save/load).
-    wireById.clear()
-    wireByName.clear()
-    for (const model of merged) {
-      if (model.wireConfigName !== undefined) {
-        wireById.set(model.id, model.wireConfigName)
-        wireByName.set(model.name.trim().toLowerCase(), model.wireConfigName)
+    /**
+     * Resolution failures degrade to omitting DeviceInfo (its being required
+     * is unverified, docs/INTL_SG_EVIDENCE.md §5) rather than failing the
+     * refresh.
+     */
+    const refreshDeviceSafe = async (): Promise<TraeRefreshDevice | undefined> => {
+      try {
+        const value = await identity()
+        return { deviceId: value.deviceId, machineId: value.machineId }
+      } catch {
+        return undefined
       }
     }
-    // Persist the merged catalog (including each model's wireConfigName) into
-    // the live catalog the chat bridge reads, so requests resolve the real
-    // config_name even before the user re-saves the refreshed directory.
-    const next = applyImageSelection(merged, imageSet(current()))
-    catalog.set(next)
-    return merged
+    const store = new TraeCredentialStore({
+      region,
+      ...config.authFile === undefined ? {} : { storagePath: config.authFile },
+      edition: config.edition ?? 'auto',
+      // The refresh callback resolves the device identity lazily so an
+      // international SOLO account refreshes with its own installation's
+      // machine/device ids (the official client sends a DeviceInfo body there).
+      refresh: async credential => refreshTraeCredential(credential, undefined, await refreshDeviceSafe()),
+    })
+    // No baseUrl: the chat gateway follows the selected credential's region
+    // (`trae-api-cn.mchost.guru` for CN, `coresg-normal.trae.ai` for ai).
+    const solo = new TraeSoloUpstreamClient({
+      credential: () => store.resolve(),
+      identity,
+      log: (message, detail) => ctx.logger.warn(message, detail),
+    })
+    const remoteCatalog = new TraeSoloRemoteCatalogClient({ credential: () => store.resolve() })
+    // Keep the native llm_utils_chat bridge as the only chat route: unlike the
+    // polling Remote session API, it preserves Trae's structured tool_calls so
+    // DSH can execute local read/write/bash tools and continue the agent loop.
+    // A wire resolver maps each display model id to its real llm_utils_chat
+    // config_name. It is populated once at startup from get_detail_param and
+    // never depends on a user-refreshed or re-saved directory, so Seed-Code and
+    // other models whose wire id differs from the display id resolve correctly
+    // even on a fresh install. The map is per region: the two rosters overlap
+    // but are not identical, and a shared map would cross-resolve ids.
+    const wireResolver = (displayId: string): string | undefined =>
+      wire.byId.get(displayId) ?? wire.byName.get(displayId.trim().toLowerCase())
+    const upstream = new TraeSoloBridge(solo, catalog, wireResolver)
+    // The shim always sees a stable client; the Raw gateway may replace the
+    // delegate asynchronously, but it stays disabled until a probe succeeds.
+    const delegating = new TraeDelegatingUpstreamClient(upstream)
+    const shim = createTraeShim({ catalog, client: delegating, logger: ctx.logger })
+    let rawDiagnostic = (): TraeRawDiagnostic => ({ state: 'disabled' })
+
+    // Raw Chat is probed on the CN stack only: the probe model
+    // (`qwen-3.7-plus`) is CN-only, and the gateway stays disabled either way
+    // — SOLO remains the only live path. The international stack therefore
+    // reports `disabled` and never touches the raw endpoint.
+    if (region === 'cn') {
+      void (async () => {
+        try {
+          const probeModel = 'qwen-3.7-plus'
+          const resolved = await resolveTraeRawRuntime(store, probeModel)
+          const rawClient = new TraeRawChatUpstreamClient({
+            credential: () => store.resolve(),
+            identity: async () => resolved.identity,
+            config: { model: resolved.runtime.modelName, configName: resolved.runtime.configName, passBackReasoning: true, runtime: resolved.runtime },
+          })
+          const gateway = createTraeRawGateway({
+            raw: rawClient,
+            solo: upstream,
+            endpoint: `${REGION_GATEWAYS.cn.chat}/api/ide/v2/llm_raw_chat`,
+            edition: resolved.identity.edition,
+            identity: { appVersion: resolved.identity.appVersion ?? '', buildVersion: resolved.identity.buildVersion ?? '' },
+            runtime: resolved.runtime,
+            // Raw Chat stays opt-in and unverified; SOLO remains the only live path.
+            enabled: false,
+          })
+          delegating.replace(gateway.upstream)
+          rawDiagnostic = () => gateway.diagnostic()
+          ctx.effect(() => () => gateway.invalidate(), 'dsh-connect-trae: Raw capability invalidation')
+        } catch (error: unknown) {
+          ctx.logger.warn('dsh-connect-trae: Raw gateway unavailable; continuing with native SOLO tool-call channel', error)
+        }
+      })()
+    }
+
+    // Read-only usage/credit summary served to the browser half. Optional on
+    // the `webServer` seam; absent in headless runs, the host provider still
+    // works.
+    //
+    // Account selection is strictly the user's choice: the store resolves the
+    // explicitly selected `accountId` verbatim, and only falls back to the
+    // first discovered account when nothing has been selected yet. The plugin
+    // must NOT silently switch to a different account that happens to have
+    // general credits — that would bill the wrong account against the user's
+    // intent.
+    const usageClient = new TraeUsageClient({ credential: () => store.resolve() })
+
+    stacks[region] = {
+      region,
+      store,
+      catalog,
+      shim,
+      delegating,
+      usageClient,
+      discoverModels: async (signal?: AbortSignal): Promise<readonly TraeModelInfo[]> => {
+        // The Remote /models directory is the model skeleton (display id, name,
+        // context, credit, reasoning). get_detail_param only supplies the real
+        // llm_utils_chat config_name for models whose display id differs from
+        // the wire id (e.g. Seed-Code); it does not define the catalog itself.
+        const [remote, wireModels] = await Promise.all([
+          remoteCatalog.fetchModels(signal),
+          solo.fetchModels(signal),
+        ])
+        const merged = mergeTraeModelSources(remote, wireModels)
+        // Record every callable display key (id and name) so stale saved
+        // catalogs are filtered against the live wire map and dead
+        // config_names cannot be resurrected from an old `lastCatalog` /
+        // `models` / `enabledModelIds`.
+        wire.callableKeys.clear()
+        for (const model of merged) {
+          wire.callableKeys.add(model.id.trim().toLowerCase())
+          wire.callableKeys.add(model.name.trim().toLowerCase())
+        }
+        // Mark the wire map authoritative only once a merge produced rows. A
+        // live Trae account that reports only part of the catalog (or an
+        // edition whose `/models` list is a subset) would otherwise let this
+        // filter delete every model it did not mention — including the
+        // built-in fallback set, which Remote never advertised and so can
+        // never appear in `callableKeys`.
+        wire.resolved = merged.length > 0
+        // Populate the startup wire resolver (display id and display name →
+        // wire config_name) so the chat bridge resolves the real config_name
+        // even when the persisted catalog lacks `wireConfigName` (the settings
+        // schema drops unknown fields on save/load).
+        wire.byId.clear()
+        wire.byName.clear()
+        for (const model of merged) {
+          if (model.wireConfigName !== undefined) {
+            wire.byId.set(model.id, model.wireConfigName)
+            wire.byName.set(model.name.trim().toLowerCase(), model.wireConfigName)
+          }
+        }
+        // Discovery is a pure data return (workbuddy semantics): the card's
+        // "refresh" drafts this list for an explicit save, and the startup
+        // seed installs it into the live catalog. Writing it here would leak
+        // un-enabled models into the runtime catalog until the next save.
+        return merged
+      },
+      invalidateAdapter: () => {},
+      rawDiagnostic: () => rawDiagnostic(),
+    }
   }
+
+  // Same-origin routes backing the card. Each request names the region whose
+  // tab it belongs to; the region-scoped accessors below then read (and the
+  // save writes back into) that region's own slot.
   ctx.inject(['webServer'], (webCtx) => registerTraeUsageRoute(webCtx, {
-    store,
-    client: usageClient,
-    displayModels: () => displayModels(current()),
-    enabledModelIds: () => current().enabledModelIds ?? [],
-    discoverModels,
-    rawDiagnostic: () => rawDiagnostic(),
+    store: region => stacks[region].store,
+    client: region => stacks[region].usageClient,
+    displayModels: region => displayModels(current(), region),
+    enabledModelIds: region => regionStateOf(current(), region).enabledModelIds ?? [],
+    discoverModels: (region, signal) => stacks[region].discoverModels(signal),
+    rawDiagnostic: region => stacks[region].rawDiagnostic(),
   }))
+
+  /** Push the current config into every region's store selection and catalog. */
+  const applySelection = (value: Config): void => {
+    for (const region of REGION_KEYS) {
+      const stack = stacks[region]
+      stack.store.setSource(value.authFile, value.edition ?? 'auto', effectiveAccountFor(region, value))
+      stack.catalog.set(configuredModels(value, region))
+      stack.invalidateAdapter()
+    }
+  }
 
   const sectionHooks: SettingsSectionHooks<Config> = {
     setSource(source) { current = source },
-    onChange() {
-      const next = current()
-      store.setSource(next.authFile, next.edition ?? 'auto', next.accountId)
-      catalog.set(configuredModels(next))
-      invalidateAdapter()
-    },
+    onChange() { applySelection(current()) },
   }
+
+  // Initial wiring: selections and per-region catalogs from the saved state.
+  applySelection(config)
+
+  // Attribute the legacy single-account selection to its own region once the
+  // local scan can tell which one that is, then re-apply. Until this resolves
+  // (or when no legacy field exists) both regions simply run their defaults.
+  void (async () => {
+    const id = current().accountId
+    if (id === undefined) return
+    try {
+      for (const region of REGION_KEYS) {
+        const accounts = await stacks[region].store.accounts()
+        if (accounts.some(account => account.id === id)) {
+          legacyAccountRegion = region
+          applySelection(current())
+          return
+        }
+      }
+      // The saved account vanished (Trae replaced its sign-in): no attribution,
+      // both regions keep their defaults, and the card lets the user re-select.
+    } catch {
+      // Scan failure: keep defaults; the next card-driven scan converges.
+    }
+  })()
   // DSH 0.1.2 replaced the free `installSettingsSection` helper with the
   // `settings` service's `installSection` method. The Desktop host keeps the
   // old helper as a legacy shim, but npm installs of 0.1.2 do not — and a
@@ -328,32 +566,31 @@ export function apply(ctx: Context, config: Config): void {
   let stopped = false
   ctx.effect(() => () => {
     stopped = true
-    void shim.close()
+    for (const region of REGION_KEYS) void stacks[region].shim.close()
   })
 
-  void shim.ready.then(async () => {
+  void Promise.all(REGION_KEYS.map(region => stacks[region].shim.ready)).then(async () => {
     if (stopped) return
-    // Resolve the wire-id map once at startup before serving requests, so the
-    // chat bridge can translate display ids to real config_names without the
-    // user ever opening the model card or re-saving the directory.
-    try {
-      await discoverModels()
-    } catch (error: unknown) {
-      ctx.logger.warn('dsh-connect-trae: wire-id resolution failed at startup; falling back to display ids', error)
-    }
-    catalog.set(configuredModels(current()))
-    const trae = createTraeAdapter({
-      shim,
-      catalog,
-      resolveAttachments: () => ctx.get('attachments'),
-    })
-    invalidateAdapter = () => { trae.invalidate() }
-    let releaseAdapter: (() => void) | undefined
+    let releaseAdapterCn: (() => void) | undefined
+    let releaseAdapterAi: (() => void) | undefined
     let releaseDirectory: (() => void) | undefined
     try {
-      releaseAdapter = ctx.llm.registerAdapter([TRAE_PROVIDER], trae.adapter)
+      for (const region of REGION_KEYS) {
+        const stack = stacks[region]
+        const trae = createTraeAdapter({
+          shim: stack.shim,
+          catalog: stack.catalog,
+          provider: TRAE_PROVIDERS[region],
+          displayName: TRAE_PROVIDER_DISPLAY_NAMES[region],
+          resolveAttachments: () => ctx.get('attachments'),
+        })
+        stack.invalidateAdapter = () => { trae.invalidate() }
+        if (region === 'cn') releaseAdapterCn = ctx.llm.registerAdapter([TRAE_PROVIDER], trae.adapter)
+        else releaseAdapterAi = ctx.llm.registerAdapter([TRAE_AI_PROVIDER], trae.adapter)
+      }
       ctx.llm.registerModelDiscovery(TRAE_SETTINGS_NS, async (request, signal) => {
-        if (request.provider !== TRAE_PROVIDER) return []
+        const region = regionOfTraeProvider(request.provider ?? '')
+        if (region === undefined) return []
         // Discovery must advertise the same image capability as the live
         // adapter catalog. The upstream flag is deliberately ignored; only the
         // user's explicit `imageModelIds` selection is authoritative.
@@ -363,8 +600,8 @@ export function apply(ctx: Context, config: Config): void {
         // request object, so read both.
         const cancellation = signal ?? (request as { signal?: AbortSignal }).signal
         const next = applyImageSelection(
-          await discoverModels(cancellation),
-          imageSet(current()),
+          await stacks[region].discoverModels(cancellation),
+          imageSet(current(), region),
         )
         return next.map(model => ({
           id: model.id,
@@ -383,23 +620,53 @@ export function apply(ctx: Context, config: Config): void {
         settingsNs: TRAE_SETTINGS_NS,
         settingsPath: [],
         declared: false,
-      }])
+      })))
     } finally {
-      if (releaseAdapter === undefined || releaseDirectory === undefined) {
-        releaseAdapter?.()
+      if (releaseAdapterCn === undefined || releaseAdapterAi === undefined || releaseDirectory === undefined) {
+        // Registration threw; release whichever half landed.
+        releaseAdapterCn?.()
+        releaseAdapterAi?.()
         releaseDirectory?.()
       }
     }
     try {
       ctx.effect(() => () => {
-        releaseAdapter?.()
+        releaseAdapterCn?.()
+        releaseAdapterAi?.()
         releaseDirectory?.()
       })
     } catch {
-      releaseAdapter?.()
+      releaseAdapterCn?.()
+      releaseAdapterAi?.()
       releaseDirectory?.()
     }
+
+    // Startup seed per region (workbuddy semantics): resolve the wire-id map
+    // once at startup before serving requests, so the chat bridge can
+    // translate display ids to real config_names without the user ever opening
+    // the model card or re-saving the directory. The runtime catalog derives
+    // from the LIVE directory of that region's selected account, so DSH serves
+    // what the upstream actually answers today — an account on a
+    // never-configured region gets its real roster (with wire ids) immediately,
+    // without pressing "refresh" + "save" first. `lastCatalog` is deliberately
+    // NOT seeded here: it belongs to the user's explicit save. A discovery
+    // failure (no credentials, upstream down) degrades to the configured
+    // state — the saved directory, else the region's fallback.
+    for (const region of REGION_KEYS) {
+      void (async () => {
+        const stack = stacks[region]
+        try {
+          const models = await stack.discoverModels()
+          if (stopped) return
+          stack.catalog.set(derive(current(), models, region))
+        } catch (error: unknown) {
+          ctx.logger.warn(`dsh-connect-trae: live ${region} model directory unavailable; serving the configured catalog`, error)
+          stack.catalog.set(configuredModels(current(), region))
+        }
+        stack.invalidateAdapter()
+      })()
+    }
   }).catch((error: unknown) => {
-    ctx.logger.error('dsh-connect-trae: loopback shim failed; provider not registered', error)
+    ctx.logger.error('dsh-connect-trae: loopback shim failed; providers not registered', error)
   })
 }

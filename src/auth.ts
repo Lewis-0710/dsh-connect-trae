@@ -5,6 +5,7 @@ import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { parseTraeCliToken, parseTraeStorageDocument } from './decrypt.ts'
 import { traeStorageCandidates, type TraeCredentialSource, type TraeEdition, type TraeStorageCandidate } from './paths.ts'
+import { regionOfCredential, regionOfEdition, type TraeRegion } from './region.ts'
 
 export interface TraeCredential {
   accessToken: string
@@ -12,6 +13,12 @@ export interface TraeCredential {
   userId: string
   accountName?: string
   host: string
+  /**
+   * Region claim from the decrypted storage document (`userRegion.region`,
+   * 'CN' | 'SG', possibly lowercase). Drives the routing bucket together with
+   * `host`; see `regionOfCredential`.
+   */
+  userRegion?: string
   expiresAtMs: number
   refreshExpiresAtMs?: number
   edition: TraeEdition
@@ -31,6 +38,14 @@ export interface TraeCredentialStoreOptions {
   edition?: TraeEdition | 'auto'
   accountId?: string
   ownPath?: string
+  /**
+   * Region this store serves. When set, only credentials whose own claim maps
+   * to this region are discovered, selected, or refreshed — the two regions'
+   * stores run side by side without seeing each other's accounts.
+   */
+  region?: TraeRegion
+  /** Legacy single-copy path read as a migration source; injectable for tests. */
+  legacyOwnPath?: string
   refresh: (credential: TraeCredential) => Promise<TraeRefreshOutcome>
   refreshMarginMs?: number
 }
@@ -39,6 +54,8 @@ export interface TraeAccountChoice {
   id: string
   accountName: string
   edition: TraeEdition
+  /** Routing bucket of this account (`cn` | `ai`), derived from its credential. */
+  region: TraeRegion
   source: 'desktop' | 'dsh' | 'cli'
   tokenExpiresAtMs: number
   selected: boolean
@@ -62,7 +79,24 @@ const CLI_DEFAULT_HOST = 'https://api.trae.cn'
 const OWN_VERSION = 1
 export const TRAE_AUTH_FILENAME = '.trae-auth.json'
 
-export function traeOwnAuthPath(): string {
+/** Prefix of the plugin-owned per-region credential copies. */
+const TRAE_OWN_PREFIX = '.trae-auth'
+
+/**
+ * Plugin-owned copy path for one region. Each region's store refreshes into
+ * its own file so two simultaneously signed-in regions never overwrite each
+ * other's refreshed token.
+ */
+export function traeOwnAuthPath(region: TraeRegion): string {
+  return join(resolveDshHome(), `${TRAE_OWN_PREFIX}.${region}.json`)
+}
+
+/**
+ * Pre-dual-provider single-copy path. Still read as a migration source (a
+ * legacy credential serves the region it belongs to until that region's own
+ * first refresh writes the per-region file), and removed by `logout`.
+ */
+export function legacyTraeOwnAuthPath(): string {
   return join(resolveDshHome(), TRAE_AUTH_FILENAME)
 }
 
@@ -79,6 +113,14 @@ function timeToMs(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
+/** Extract the `userRegion.region` string from either on-disk shape. */
+function userRegionOf(value: unknown): string | undefined {
+  const raw = typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)['region']
+    : value
+  return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : undefined
+}
+
 export function normalizeTraeCredential(raw: unknown, edition: TraeEdition, source: TraeCredential['source']): TraeCredential | undefined {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined
   const value = raw as Record<string, unknown>
@@ -87,6 +129,7 @@ export function normalizeTraeCredential(raw: unknown, edition: TraeEdition, sour
   const expiresAtMs = timeToMs(value['expiredAt'] ?? value['expiresAt']) ?? 0
   const refreshExpiresAtMs = timeToMs(value['refreshExpiredAt'] ?? value['refreshExpiresAt'])
   const refreshToken = optionalString(value['refreshToken'])
+  const userRegion = userRegionOf(value['userRegion'])
   const account = typeof value['account'] === 'object' && value['account'] !== null && !Array.isArray(value['account'])
     ? value['account'] as Record<string, unknown>
     : undefined
@@ -97,6 +140,7 @@ export function normalizeTraeCredential(raw: unknown, edition: TraeEdition, sour
     userId: optionalString(value['userId']) ?? '',
     ...accountName === undefined ? {} : { accountName },
     host: optionalString(value['host']) ?? '',
+    ...userRegion === undefined ? {} : { userRegion },
     expiresAtMs,
     ...refreshExpiresAtMs === undefined ? {} : { refreshExpiresAtMs },
     edition,
@@ -118,6 +162,7 @@ function parseOwn(text: string): TraeCredential | undefined {
     if (edition !== 'cn' && edition !== 'sg' && edition !== 'solo' && edition !== 'solo-sg') return undefined
     return normalizeTraeCredential({
       token: stored['accessToken'], refreshToken: stored['refreshToken'], userId: stored['userId'], host: stored['host'],
+      userRegion: stored['userRegion'],
       account: stored['accountName'] === undefined ? undefined : { username: stored['accountName'] },
       expiredAt: stored['expiresAtMs'], refreshExpiredAt: stored['refreshExpiresAtMs'],
     }, edition, 'dsh')
@@ -128,7 +173,10 @@ export class TraeCredentialStore {
   private storagePathOverride: string | undefined
   private edition: TraeEdition | 'auto'
   private accountId: string | undefined
-  private readonly ownPath: string
+  private readonly region: TraeRegion | undefined
+  private readonly ownPathExplicit: string | undefined
+  private readonly legacyOwnPath: string
+  private readonly legacyOwnPathExplicit: string | undefined
   private readonly refresh: TraeCredentialStoreOptions['refresh']
   private readonly refreshMarginMs: number
   private inflight: Promise<TraeCredential> | undefined
@@ -137,9 +185,49 @@ export class TraeCredentialStore {
     this.storagePathOverride = options.storagePath
     this.edition = options.edition ?? 'auto'
     this.accountId = options.accountId
-    this.ownPath = options.ownPath ?? traeOwnAuthPath()
+    this.region = options.region
+    this.ownPathExplicit = options.ownPath
+    this.legacyOwnPath = options.legacyOwnPath ?? legacyTraeOwnAuthPath()
+    this.legacyOwnPathExplicit = options.legacyOwnPath
     this.refresh = options.refresh
     this.refreshMarginMs = options.refreshMarginMs ?? 5 * 60_000
+  }
+
+  /** Whether a credential's own claim belongs to this store's region. */
+  private matchesRegion(credential: TraeCredential): boolean {
+    return this.region === undefined || regionOfCredential(credential) === this.region
+  }
+
+  /**
+   * The path this store refreshes into: the per-region file for a
+   * region-scoped store, the legacy single file otherwise, or an explicitly
+   * injected path in tests.
+   */
+  ownAuthPath(): string {
+    if (this.ownPathExplicit !== undefined) return this.ownPathExplicit
+    return this.region !== undefined ? traeOwnAuthPath(this.region) : this.legacyOwnPath
+  }
+
+  /**
+   * Every plugin-owned copy to read, most preferred first. A region-scoped
+   * store reads the legacy single copy as its migration source (readAll's
+   * region filter drops it when it carries the other region's credential); an
+   * unscoped store reads everything so diagnostics see both regions.
+   *
+   * With an explicitly injected own path the legacy source is read ONLY when
+   * it was injected too — a test that pins one file must not accidentally see
+   * the real machine's legacy copy.
+   */
+  private ownCandidates(): string[] {
+    if (this.ownPathExplicit !== undefined) {
+      return this.legacyOwnPathExplicit !== undefined
+        ? [this.ownPathExplicit, this.legacyOwnPathExplicit]
+        : [this.ownPathExplicit]
+    }
+    if (this.region !== undefined) {
+      return [traeOwnAuthPath(this.region), this.legacyOwnPath]
+    }
+    return [this.legacyOwnPath, traeOwnAuthPath('cn'), traeOwnAuthPath('ai')]
   }
 
   setSource(storagePath: string | undefined, edition: TraeEdition | 'auto' = 'auto', accountId?: string): void {
@@ -166,11 +254,16 @@ export class TraeCredentialStore {
       ]
     }
     const all = traeStorageCandidates()
-    // This connector targets the CN service and Work-credit contracts only.
-    // Ignore SG installations even when they are signed in locally.
+    // Every desktop edition is discovered (the plugin routes by the
+    // credential's own region, see region.ts); an explicit `edition` config
+    // narrows the scan. The international CLI home (`~/.trae`) stays excluded:
+    // its bare JWT carries no host claim and the SG default host has not been
+    // verified (docs/INTL_SG_EVIDENCE.md §5), so only the CN CLI home
+    // (`.trae-cn`) is probed.
+    const cliEdition: TraeEdition = 'cn'
     return this.edition === 'auto'
-      ? all.filter(candidate => candidate.edition === 'cn' || candidate.edition === 'solo')
-      : all.filter(candidate => candidate.edition === this.edition && (candidate.edition === 'cn' || candidate.edition === 'solo'))
+      ? all.filter(candidate => candidate.source === 'desktop' || candidate.edition === cliEdition)
+      : all.filter(candidate => candidate.edition === this.edition && (candidate.source === 'desktop' || candidate.edition === cliEdition))
   }
 
   /**
@@ -191,6 +284,7 @@ export class TraeCredentialStore {
       id: traeAccountId(credential),
       accountName: credential.accountName ?? (credential.userId || `${credential.edition} account`),
       edition: credential.edition,
+      region: regionOfCredential(credential),
       source: credential.source,
       tokenExpiresAtMs: credential.expiresAtMs,
       selected: selectedExists ? traeAccountId(credential) === this.accountId : credential === defaultSelected,
@@ -231,17 +325,39 @@ export class TraeCredentialStore {
     return false
   }
 
+  /**
+   * Remove every plugin-owned copy this store could read (per-region file,
+   * legacy single file, and their lock siblings); the desktop storage files
+   * are untouched. A region store's logout therefore also clears the legacy
+   * migration source — deliberate: `logout` is the user's "forget what the
+   * plugin stored" action, not a per-account toggle.
+   */
   async logout(): Promise<void> {
-    await rm(this.ownPath, { force: true })
-    await rm(`${this.ownPath}.lock`, { force: true })
+    for (const path of this.ownCandidates()) {
+      await rm(path, { force: true })
+      await rm(`${path}.lock`, { force: true })
+    }
   }
 
+  /**
+   * Every local credential of this store's region, deduplicated by account id.
+   * A region-scoped store sees only its own region's credentials: the other
+   * region's accounts are invisible to selection, refresh, and status alike,
+   * which is what keeps the two regions' providers from cross-billing.
+   */
   private async readAll(): Promise<TraeCredential[]> {
     const { credentials: desktop } = await this.readDesktopAll()
-    const own = await this.readOwn()
-    const cnOwn = own?.edition === 'cn' || own?.edition === 'solo' ? own : undefined
-    if (cnOwn === undefined || desktop.some(credential => traeAccountId(credential) === traeAccountId(cnOwn))) return desktop
-    return [...desktop, cnOwn]
+    const scoped = desktop.filter(credential => this.matchesRegion(credential))
+    // The own copies are accepted for every edition: they are refresh results
+    // the plugin itself wrote, so an international account's refreshed
+    // credential must not be dropped just because it is not a CN edition.
+    const credentials = [...scoped]
+    for (const own of await this.readOwns()) {
+      if (!this.matchesRegion(own)) continue
+      if (credentials.some(credential => traeAccountId(credential) === traeAccountId(own))) continue
+      credentials.push(own)
+    }
+    return credentials
   }
 
   /**
@@ -290,18 +406,22 @@ export class TraeCredentialStore {
   private credentialFrom(candidate: TraeStorageCandidate, text: string): TraeCredential {
     let credential: TraeCredential | undefined
     if (candidate.source === 'cli') {
+      // The CLI token carries no host claim and no userRegion, so the CN host
+      // is used rather than an empty string. Only the CN CLI home
+      // (`.trae-cn`) is verified: an international CLI token cannot be routed
+      // correctly yet (see docs/INTL_SG_EVIDENCE.md §5) and is rejected with
+      // a diagnosable error instead of being silently misrouted to the CN
+      // gateway.
+      if (regionOfEdition(candidate.edition) !== 'cn') {
+        throw new Error(`Trae CLI tokens are only verified for the CN region; ${candidate.edition} CLI homes are not supported yet`)
+      }
       const claims = parseTraeCliToken(text)
-      // The CLI token carries no host claim, so the CN host is used rather than
-      // an empty string, which would otherwise become an unusable base URL. Its
-      // edition is likewise CN-only: `.trae-cn` is the CN CLI home and the bare
-      // `.trae` fallback is treated as CN too, since the store already filters
-      // international installs out of the desktop path.
       credential = normalizeTraeCredential({
         token: claims.accessToken,
         userId: claims.userId,
         host: CLI_DEFAULT_HOST,
         expiredAt: claims.expiresAtMs,
-      }, candidate.edition === 'sg' ? 'cn' : candidate.edition, 'cli')
+      }, candidate.edition, 'cli')
     } else {
       credential = normalizeTraeCredential(parseTraeStorageDocument(text), candidate.edition, 'desktop')
     }
@@ -337,9 +457,21 @@ export class TraeCredentialStore {
     return { credentials, failures }
   }
 
-  private async readOwn(): Promise<TraeCredential | undefined> {
-    try { return parseOwn(await readFile(this.ownPath, 'utf8')) }
-    catch { return undefined }
+  /**
+   * Every readable plugin-owned copy, in candidate order; absent or corrupt
+   * files are skipped rather than propagated.
+   */
+  private async readOwns(): Promise<TraeCredential[]> {
+    const copies: TraeCredential[] = []
+    for (const path of this.ownCandidates()) {
+      try {
+        const parsed = parseOwn(await readFile(path, 'utf8'))
+        if (parsed !== undefined) copies.push(parsed)
+      } catch {
+        // absent or unreadable — the next candidate is tried
+      }
+    }
+    return copies
   }
 
   private async refreshNow(credential: TraeCredential): Promise<TraeCredential> {
@@ -358,8 +490,9 @@ export class TraeCredentialStore {
         ...outcome.host === undefined ? {} : { host: outcome.host },
         source: 'dsh',
       }
-      await withFileLock(this.ownPath, async () => {
-        await writeFileAtomic(this.ownPath, `${JSON.stringify({ version: OWN_VERSION, credential: refreshed }, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
+      const ownPath = this.ownAuthPath()
+      await withFileLock(ownPath, async () => {
+        await writeFileAtomic(ownPath, `${JSON.stringify({ version: OWN_VERSION, credential: refreshed }, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
       })
       return refreshed
     } catch (error: unknown) {

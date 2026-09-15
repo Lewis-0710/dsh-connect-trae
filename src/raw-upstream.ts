@@ -1,6 +1,7 @@
 import type { TraeCredential } from './auth.ts'
 import type { TraeIdentity } from './identity.ts'
 import { buildTraeCnHeaders, traeEndpoint } from './protocol.ts'
+import { REGION_GATEWAYS, regionOfCredential } from './region.ts'
 import { buildTraeRawChatDraft, TRAE_RAW_CHAT_V2_PATH, type RawChatMessage, type RawChatTool } from './raw-chat.ts'
 import { traeRawChatExtraInfo, type TraeRawChatRuntimeConfig } from './raw-runtime-config.ts'
 import type { TraeChatResult, TraeUpstreamErrorKind } from './upstream.ts'
@@ -86,7 +87,7 @@ export class TraeRawChatUpstreamClient {
     }
     let response: Response
     try {
-      response = await this.fetchImpl(traeEndpoint(this.options.baseUrl ?? credential.host, TRAE_RAW_CHAT_V2_PATH), {
+      response = await this.fetchImpl(traeEndpoint(this.options.baseUrl ?? REGION_GATEWAYS[regionOfCredential(credential)].chat, TRAE_RAW_CHAT_V2_PATH), {
         method: 'POST', headers, body: JSON.stringify(body), signal: signal ?? AbortSignal.timeout(30_000),
       })
     } catch (error: unknown) {

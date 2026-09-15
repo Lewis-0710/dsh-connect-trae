@@ -16,22 +16,37 @@ import type { TraeCredentialStore } from './auth.ts'
 import type { TraeModelInfo } from './catalog.ts'
 import type { TraeUsageClient } from './usage.ts'
 import type { TraeRawDiagnostic } from './raw-diagnostic.ts'
-import { TRAE_ACCOUNTS_REFRESH_PATH, TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from './status-paths.ts'
+import type { TraeRegion } from './region.ts'
+import {
+  regionOfTraeStatusUrl,
+  TRAE_ACCOUNTS_REFRESH_PATH,
+  TRAE_MODELS_REFRESH_PATH,
+  TRAE_USAGE_PATH,
+} from './status-paths.ts'
 import type { TraeWebCredits, TraeWebUsage } from './status-paths.ts'
 
 export { TRAE_USAGE_PATH } from './status-paths.ts'
 export type { TraeWebUsage } from './status-paths.ts'
 
-/** Constructor dependencies. */
+/**
+ * Constructor dependencies. Everything region-specific is addressed by the
+ * region the request names: the two regions are separate provider stacks, so
+ * the card must be served the directory, selection, and credits of the tab the
+ * user is on.
+ */
 export interface TraeUsageRouteOptions {
-  store: TraeCredentialStore
-  client: TraeUsageClient
-  /** The last-refreshed Trae raw directory (one entry per upstream model) for card display. */
-  displayModels(): readonly TraeModelInfo[]
-  /** The user's model selection stored as model id (= Trae name). */
-  enabledModelIds(): readonly string[]
-  discoverModels?(signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
-  rawDiagnostic?(): TraeRawDiagnostic
+  /** The region-scoped credential store backing each region's requests. */
+  store(region: TraeRegion): TraeCredentialStore
+  /** The region-scoped usage client (CN work credits / international pay status). */
+  client(region: TraeRegion): TraeUsageClient
+  /** The requested region's last-refreshed raw directory (one entry per upstream model). */
+  displayModels(region: TraeRegion): readonly TraeModelInfo[]
+  /** The user's model selection in the requested region, stored as model id (= Trae name). */
+  enabledModelIds(region: TraeRegion): readonly string[]
+  /** Re-read one region's live directory from the upstream. */
+  discoverModels?(region: TraeRegion, signal?: AbortSignal): Promise<readonly TraeModelInfo[]>
+  /** Raw-Chat capability state of the requested region. */
+  rawDiagnostic?(region: TraeRegion): TraeRawDiagnostic
 }
 
 /** Redact token-like content before it crosses to the browser. */
@@ -85,19 +100,22 @@ function toCredits(snapshot: { summary: { totalAmount: number; consumedAmount: n
 }
 
 /**
- * Assemble the card's usage document. Sign-in state is read-only; credit is a
- * live billing answer whose failure degrades to `creditsError` rather than
- * failing the whole document.
+ * Assemble one region's card document. `region` is the tab the card is on; the
+ * region-scoped store already answers with only that region's accounts, so the
+ * document's model slots and account list are that region's by construction.
+ * Sign-in state is read-only; credit is a live billing answer whose failure
+ * degrades to `creditsError` rather than failing the whole document.
  */
-export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWebUsage> {
-  const accounts = await deps.store.accounts()
-  const authStatus = await deps.store.status()
+export async function traeWebUsage(deps: TraeUsageRouteOptions, region: TraeRegion): Promise<TraeWebUsage> {
+  const store = deps.store(region)
+  const accounts = await store.accounts()
+  const authStatus = await store.status()
   if (authStatus.state !== 'signed-in') {
     // A bare "signed out" is undiagnosable on a machine whose layout differs
     // from the ones this plugin was written against — the reported WSL2/CLI
     // case. The probed paths and their failure reasons are safe to surface:
     // they carry paths and error text, never token material.
-    const { failures } = await deps.store.diagnose()
+    const { failures } = await store.diagnose()
     return {
       status: 'signed-out',
       accounts,
@@ -112,7 +130,7 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWeb
   }
   let credential
   try {
-    credential = await deps.store.resolve()
+    credential = await store.resolve()
   } catch (error: unknown) {
     // Account selection must remain available even when the selected token is
     // expired or its refresh request fails. Report that as account-level status
@@ -120,22 +138,50 @@ export async function traeWebUsage(deps: TraeUsageRouteOptions): Promise<TraeWeb
     return { status: 'signed-out', accounts, message: safeMessage(error) }
   }
   // Only user-facing identity and expiry cross to the browser. Token material
-  // and stable user IDs stay on the Host.
+  // and stable user IDs stay on the Host. The requested region drives which
+  // per-region model directory and selection this document reports, and which
+  // usage surface the credits block reads.
   const account = {
     accountId: accounts.find(item => item.selected)?.id ?? '',
     accountName: credential.accountName ?? credential.userId,
     tokenExpiresAtMs: credential.expiresAtMs,
+    region,
     accounts,
-    models: deps.displayModels().map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
-    enabledModelIds: [...deps.enabledModelIds()],
-    ...deps.rawDiagnostic === undefined ? {} : { rawChat: deps.rawDiagnostic() },
+    models: deps.displayModels(region).map(model => ({ ...model, ...model.input === undefined ? {} : { input: [...model.input] } })),
+    enabledModelIds: [...deps.enabledModelIds(region)],
+    ...deps.rawDiagnostic === undefined ? {} : { rawChat: deps.rawDiagnostic(region) },
+  }
+  const client = deps.client(region)
+  if (region === 'ai') {
+    // The international region is subscription-based: read its pay status
+    // instead of the CN Work-credit packs. A failure degrades to
+    // payStatusError, exactly like creditsError on the CN side.
+    try {
+      const payStatus = await client.payStatus()
+      return { status: 'signed-in', ...account, payStatus }
+    } catch (error: unknown) {
+      return { status: 'signed-in', ...account, payStatusError: safeMessage(error) }
+    }
   }
   try {
-    const snapshot = await deps.client.snapshot()
+    const snapshot = await client.snapshot()
     return { status: 'signed-in', ...account, credits: toCredits(snapshot) }
   } catch (error: unknown) {
     return { status: 'signed-in', ...account, creditsError: safeMessage(error) }
   }
+}
+
+/**
+ * The region a request addresses, or a 400 answer. Absent parameter means the
+ * domestic tab; an unknown value is refused rather than guessed.
+ */
+function requestRegion(req: IncomingMessage, res: ServerResponse): TraeRegion | undefined {
+  const region = regionOfTraeStatusUrl(req.url ?? '/')
+  if (region === undefined) {
+    json(res, 400, { error: 'unknown region' })
+    return undefined
+  }
+  return region
 }
 
 /** Mount the GET usage route on an optional webServer context. */
@@ -153,8 +199,10 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
           json(res, 403, { error: 'origin-not-trusted' })
           return
         }
+        const region = requestRegion(req, res)
+        if (region === undefined) return
         try {
-          json(res, 200, await traeWebUsage(deps))
+          json(res, 200, await traeWebUsage(deps, region))
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })
         }
@@ -166,8 +214,10 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
       handler: async (req: IncomingMessage, res: ServerResponse) => {
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
+        const region = requestRegion(req, res)
+        if (region === undefined) return
         try {
-          json(res, 200, { accounts: await deps.store.accounts() })
+          json(res, 200, { accounts: await deps.store(region).accounts() })
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })
         }
@@ -180,8 +230,10 @@ export function registerTraeUsageRoute(ctx: Context, deps: TraeUsageRouteOptions
         if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
         if (!loopbackOrigin(req)) return json(res, 403, { error: 'origin-not-trusted' })
         if (deps.discoverModels === undefined) return json(res, 503, { error: 'model refresh unavailable' })
+        const region = requestRegion(req, res)
+        if (region === undefined) return
         try {
-          const models = await deps.discoverModels()
+          const models = await deps.discoverModels(region)
           json(res, 200, { models })
         } catch (error: unknown) {
           json(res, 500, { error: safeMessage(error) })

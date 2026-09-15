@@ -101,7 +101,9 @@ describe('Trae SOLO protocol', () => {
     }] }), { status: 200, headers: { 'content-type': 'application/json' } }))
     const client = new TraeSoloUpstreamClient({ credential: async () => credential, identity: async () => identity, fetchImpl })
     await expect(client.fetchModels()).resolves.toEqual([{ id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 168000, maxTokens: 32000 }])
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://host/api/ide/v1/get_detail_param')
+    // The gateway follows the credential's region: a solo (CN) credential routes
+    // to the CN chat gateway even though its host field names a bare origin.
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://trae-api-cn.mchost.guru/api/ide/v1/get_detail_param')
   })
 
   it('parses SOLO output, usage and reasoning tokens', () => {
@@ -115,10 +117,87 @@ describe('Trae SOLO protocol', () => {
     const result = await client.chatStream(JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }))
     expect(result.ok).toBe(true)
     const [url, init] = fetchImpl.mock.calls[0]!
-    expect(url).toBe('https://host/api/agent/v3/llm_utils_chat')
+    expect(url).toBe('https://trae-api-cn.mchost.guru/api/agent/v3/llm_utils_chat')
     const headers = init?.headers as Record<string, string>
     expect(headers['X-Ide-Token']).toBe('at')
     expect(headers['User-Agent']).toBe('Trae/0.1.43')
     expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('region-scoped gateways', () => {
+  const intlCredential: TraeCredential = {
+    accessToken: 'at', userId: 'uid', host: 'https://growsg-normal.trae.ai', userRegion: 'SG',
+    expiresAtMs: Date.now() + 1000, edition: 'solo-sg', source: 'desktop',
+  }
+
+  it('routes an international credential to the coresg chat gateway', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ config_info_list: [
+      { config_name: 'gpt-5.4', display_config: { display_name: 'GPT-5.4' }, model_detail_list: [{ prompt_max_tokens: 240000, max_tokens: 32000 }] },
+    ] }), { status: 200 }))
+    const client = new TraeSoloUpstreamClient({
+      credential: async () => intlCredential,
+      identity: async () => identity,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+    await client.fetchModels()
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://coresg-normal.trae.ai/api/ide/v1/get_detail_param')
+  })
+
+  it('routes chat the same way and keeps an explicit baseUrl a pin', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response('data: event', { status: 200 }))
+    const client = new TraeSoloUpstreamClient({
+      credential: async () => intlCredential,
+      identity: async () => identity,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+    await client.chatStream(JSON.stringify({ model: 'gpt-5.4', messages: [{ role: 'user', content: 'hi' }] }))
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://coresg-normal.trae.ai/api/agent/v3/llm_utils_chat')
+    const pinned = new TraeSoloUpstreamClient({
+      credential: async () => intlCredential,
+      identity: async () => identity,
+      baseUrl: 'https://diagnostic.example',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+    await pinned.chatStream(JSON.stringify({ model: 'gpt-5.4', messages: [{ role: 'user', content: 'hi' }] }))
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('https://diagnostic.example/api/agent/v3/llm_utils_chat')
+  })
+})
+
+describe('region-scoped model directory function', () => {
+  const intlCredential: TraeCredential = {
+    accessToken: 'at', userId: 'uid', host: 'https://growsg-normal.trae.ai', userRegion: 'SG',
+    expiresAtMs: Date.now() + 1000, edition: 'solo-sg', source: 'desktop',
+  }
+
+  it('asks the ai gateway for the solo_agent directory', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => new Response(JSON.stringify({ config_info_list: [
+      { config_name: 'minimax-m3', display_config: { display_name: 'MiniMax-M3' }, model_detail_list: [{ prompt_max_tokens: 200000, max_tokens: 32000 }] },
+    ] }), { status: 200 }))
+    const client = new TraeSoloUpstreamClient({
+      credential: async () => intlCredential,
+      identity: async () => identity,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+    await client.fetchModels()
+    const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string)
+    // The ai directory must come from solo_agent: solo_work_lite omits four of
+    // the seven remote-roster models on the international gateway.
+    expect(body['function']).toBe('solo_agent')
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://coresg-normal.trae.ai/api/ide/v1/get_detail_param')
+  })
+
+  it('keeps the CN directory on solo_work_lite', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ config_info_list: [
+      { config_name: 'glm-5.2', display_config: { display_name: 'GLM-5.2' }, model_detail_list: [{ prompt_max_tokens: 116000, max_tokens: 32000 }] },
+    ] }), { status: 200 }))
+    const client = new TraeSoloUpstreamClient({
+      credential: async () => credential,
+      identity: async () => identity,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+    await client.fetchModels()
+    const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string)
+    expect(body['function']).toBe('solo_work_lite')
   })
 })

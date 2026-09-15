@@ -29,7 +29,8 @@ describe('TraeRawChatUpstreamClient', () => {
     expect(result.ok).toBe(true)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     const [url, init] = fetchImpl.mock.calls[0]!
-    expect(url).toBe('https://host/api/ide/v2/llm_raw_chat')
+    // Region gateway replaces the old credential.host fallback for a cn credential.
+    expect(url).toBe('https://trae-api-cn.mchost.guru/api/ide/v2/llm_raw_chat')
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>
     expect(body).toMatchObject({ model: 'glm-5.2', stream: true, config_name: 'glm-5.2', prompt_set: 'chat_completion', ab_version: 'test-ab', pass_back_reasoning: true })
   })

@@ -1,6 +1,7 @@
 import type { TraeDiscoveredModel, TraeDiscoveredReasoning } from './model-metadata.ts'
 import type { TraeReasoningEffort } from './reasoning.ts'
 import type { TraeReasoningCapability } from './reasoning.ts'
+import type { TraeRegion } from './region.ts'
 
 export type TraeInputModality = 'text' | 'image'
 
@@ -33,6 +34,33 @@ export const FALLBACK_TRAE_MODELS: readonly TraeModelInfo[] = [
   { id: 'glm-5.2', name: 'GLM-5.2' },
   { id: 'kimi-k2.6', name: 'Kimi-K2.6' },
 ]
+
+/**
+ * Bootstrap catalog for the international (ai) region, captured from the
+ * live `coresg-normal.trae.ai/api/remote/v1/models` directory on 2026-09-15
+ * (docs/INTL_SG_EVIDENCE.md §3). The two rosters barely overlap (the CN list
+ * has no Gemini/GPT/MiniMax entries), so an international account must never
+ * be seeded with the CN list. Like the CN fallback it is replaced by the live
+ * refresh; image input stays the user's explicit opt-in (`imageModelIds`).
+ */
+export const FALLBACK_TRAE_MODELS_AI: readonly TraeModelInfo[] = [
+  { id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview' },
+  { id: 'gemini-3-flash-solo', name: 'Gemini-3-Flash-Preview' },
+  { id: 'minimax-m3', name: 'MiniMax-M3' },
+  { id: 'minimax-m2.7', name: 'MiniMax-M2.7' },
+  { id: 'kimi-k2.5', name: 'Kimi-K2.5' },
+  { id: 'gpt-5.4', name: 'GPT-5.4' },
+  { id: 'gpt-5.2', name: 'GPT-5.2' },
+]
+
+/**
+ * Static fallback directory for a region. Each region keeps its own model
+ * slot in settings; the fallback must match the region so an account never
+ * shows the other region's roster.
+ */
+export function fallbackModelsFor(region: TraeRegion): readonly TraeModelInfo[] {
+  return region === 'ai' ? FALLBACK_TRAE_MODELS_AI : FALLBACK_TRAE_MODELS
+}
 
 /** Exact DSH modalities for one catalog entry; absent metadata is text-only. */
 export function traeInputModalities(model: Pick<TraeModelInfo, 'input'>): TraeInputModality[] {
@@ -223,7 +251,16 @@ export function deriveCatalog(
 }
 
 export class TraeCatalog {
-  private models: readonly TraeModelInfo[] = FALLBACK_TRAE_MODELS
+  private models: readonly TraeModelInfo[]
+
+  /**
+   * @param region Seeds the static fallback for this region; each region's
+   * provider must never serve the other region's roster before its first live
+   * refresh lands.
+   */
+  constructor(region: TraeRegion = 'cn') {
+    this.models = fallbackModelsFor(region)
+  }
 
   current(): readonly TraeModelInfo[] {
     return this.models

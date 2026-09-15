@@ -1,6 +1,7 @@
 import type { TraeCredential } from './auth.ts'
 import type { TraeIdentity } from './identity.ts'
 import { buildTraeCnHeaders, traeEndpoint } from './protocol.ts'
+import { REGION_GATEWAYS, regionOfCredential } from './region.ts'
 import { parseReasoningCapability, type TraeReasoningCapability } from './reasoning.ts'
 import type { TraeChatResult, TraeUpstreamErrorKind } from './upstream.ts'
 
@@ -98,11 +99,25 @@ export class TraeSoloUpstreamClient {
 
   async fetchModels(signal?: AbortSignal): Promise<TraeSoloModel[]> {
     const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()])
-    const response = await this.fetchImpl(traeEndpoint(this.options.baseUrl ?? credential.host, TRAE_SOLO_MODELS_PATH), {
+    const region = regionOfCredential(credential)
+    const base = this.options.baseUrl ?? REGION_GATEWAYS[region].chat
+    // The model-DIRECTORY function is region-scoped while the chat function
+    // stays `solo_work_lite` on both (verified end-to-end on the ai gateway,
+    // 2026-09-15). The international gateway's `solo_work_lite` directory
+    // answers only 14 entries whose config names miss four of the seven
+    // remote-roster models (gemini-3-flash-solo, minimax-m3/m2.7, kimi-k2.5),
+    // which would leave them without a wire config_name and silently drop
+    // them from the merged catalog. Its `solo_agent` directory answers 39
+    // entries covering every remote-roster model, so that is the ai-side
+    // directory function. The remote directory stays the merge skeleton, so
+    // the extra agent-internal entries (search_agent_*, paygo variants) never
+    // surface to the user.
+    const directoryFunction = region === 'ai' ? 'solo_agent' : TRAE_SOLO_FUNCTION
+    const response = await this.fetchImpl(traeEndpoint(base, TRAE_SOLO_MODELS_PATH), {
       method: 'POST',
       headers: { ...buildTraeCnHeaders(credential, identity), Accept: 'application/json' },
       body: JSON.stringify({
-        function: TRAE_SOLO_FUNCTION,
+        function: directoryFunction,
         config_names: null,
         need_prompt: false,
         current_config_info: null,
@@ -155,9 +170,10 @@ export class TraeSoloUpstreamClient {
     catch { return { ok: false, status: 400, kind: 'client', message: 'invalid JSON request' } }
     const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()])
     const headers = buildTraeCnHeaders(credential, identity)
+    const base = this.options.baseUrl ?? REGION_GATEWAYS[regionOfCredential(credential)].chat
     let response: Response
     try {
-      response = await this.fetchImpl(traeEndpoint(this.options.baseUrl ?? credential.host, TRAE_SOLO_CHAT_PATH), {
+      response = await this.fetchImpl(traeEndpoint(base, TRAE_SOLO_CHAT_PATH), {
         method: 'POST', headers, body: prepared, signal: signal ?? AbortSignal.timeout(120_000),
       })
     } catch (error: unknown) {

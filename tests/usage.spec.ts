@@ -116,3 +116,48 @@ describe('TraeUsageClient', () => {
     await expect(client.snapshot()).rejects.toThrow('HTTP 500')
   })
 })
+
+describe('region-scoped usage surface', () => {
+  const intlCredential: TraeCredential = {
+    accessToken: 'token', userId: 'intl-uid', host: 'https://growsg-normal.trae.ai', userRegion: 'SG',
+    expiresAtMs: Date.now() + 86_400_000, edition: 'solo-sg', source: 'desktop',
+  }
+
+  it('reads the ai subscription status from its own gateway and parses it', async () => {
+    const urls: string[] = []
+    const origins: string[] = []
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      urls.push(url)
+      origins.push(((init?.headers as Record<string, string>)['Origin']) ?? '')
+      return new Response(JSON.stringify({
+        is_dollar_usage_billing: true, has_package: true, is_pay_freshman_v2: true,
+        trial_status: { is_in_trial: true, trial_end_time: 1789000000000 },
+        enable_solo_lite: true, enable_solo_builder: false, enable_solo_coder: true, enable_solo_web: false,
+        solo_fission_start_time: 1755000000000, solo_fission_expire_time: 1798000000000, solo_fission_max_usage: 30,
+      }), { status: 200 })
+    }
+    const client = new TraeUsageClient({ credential: async () => intlCredential, fetchImpl })
+    const status = await client.payStatus()
+    expect(urls).toEqual(['https://growsg-normal.trae.ai/trae/api/v1/pay/ide_user_pay_status'])
+    expect(origins).toEqual(['https://www.trae.ai'])
+    expect(status).toMatchObject({
+      isDollarUsageBilling: true, hasPackage: true, isPayFreshman: true,
+      inTrial: true, trialEndTimeMs: 1789000000000,
+      enableSoloLite: true, enableSoloBuilder: false, enableSoloCoder: true, enableSoloWeb: false,
+      fission: { startTimeMs: 1755000000000, expireTimeMs: 1798000000000, maxUsage: 30 },
+    })
+  })
+
+  it('guards the CN-only Work-credit methods with a diagnosable error on ai', async () => {
+    const client = new TraeUsageClient({ credential: async () => intlCredential, fetchImpl: async () => { throw new Error('should not fetch') } })
+    await expect(client.snapshot()).rejects.toThrow(/only available for the CN region/)
+    await expect(client.checkinStatus()).rejects.toThrow(/only available for the CN region/)
+    await expect(client.activities()).rejects.toThrow(/only available for the CN region/)
+  })
+
+  it('guards payStatus for CN credentials', async () => {
+    const client = new TraeUsageClient({ credential: async () => credential, fetchImpl: async () => { throw new Error('should not fetch') } })
+    await expect(client.payStatus()).rejects.toThrow(/only available for the international/)
+  })
+})

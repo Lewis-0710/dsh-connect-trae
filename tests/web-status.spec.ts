@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
 import type { TraeCredential } from '../src/auth.ts'
 import { TraeUsageClient, type TraeUsageOptions } from '../src/usage.ts'
+import type { TraeRegion } from '../src/region.ts'
 import type { TraeUsageRouteOptions } from '../src/web-status.ts'
 import { traeWebUsage } from '../src/web-status.ts'
+import { TRAE_USAGE_PATH } from '../src/status-paths.ts'
 
 const expiresAtMs = Date.now() + 60_000
 const credential: TraeCredential = {
@@ -19,16 +22,16 @@ function makeRoute(options: { fetchImpl?: typeof fetch } = {}): TraeUsageRouteOp
   const fetchImpl = options.fetchImpl ?? (async () => new Response('{}', { status: 200 }))
   const client = new TraeUsageClient({ credential: async () => credential, fetchImpl, baseUrl: 'https://api.trae.cn' })
   return {
-    store: {
+    store: () => ({
       async accounts() { return [{ id: 'account-1', accountName: 'LaoDing', edition: 'solo', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: true }] },
       async status() { return { state: 'signed-in', edition: 'solo', expiresAtMs: Date.now() + 1000, source: 'desktop' } },
       async resolve() { return credential },
-    } as unknown as TraeUsageRouteOptions['store'],
-    client,
-    displayModels: () => [
+    }) as unknown as ReturnType<TraeUsageRouteOptions['store']>,
+    client: () => client,
+    displayModels: (_region: TraeRegion) => [
       { id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 },
     ],
-    enabledModelIds: () => ['DeepSeek-V4-Flash'],
+    enabledModelIds: (_region: TraeRegion) => ['DeepSeek-V4-Flash'],
     rawDiagnostic: () => ({ state: 'protocol-gated', status: 400, checkedAtMs: 123 }),
   }
 }
@@ -36,12 +39,12 @@ function makeRoute(options: { fetchImpl?: typeof fetch } = {}): TraeUsageRouteOp
 describe('traeWebUsage', () => {
   it('reports signed-out when no credential is present', async () => {
     const deps = makeRoute()
-    deps.store = {
+    deps.store = () => ({
       async accounts() { return [] },
       async status() { return { state: 'signed-out' } },
       async diagnose() { return { tried: [], failures: [] } },
-    } as unknown as TraeUsageRouteOptions['store']
-    const result = await traeWebUsage(deps)
+    }) as unknown as ReturnType<TraeUsageRouteOptions['store']>
+    const result = await traeWebUsage(deps, 'cn')
     expect(result).toEqual({ status: 'signed-out', accounts: [], searched: [] })
   })
 
@@ -50,7 +53,7 @@ describe('traeWebUsage', () => {
     // "not signed in" with no way to tell why. The card must list the probed
     // paths and their failure reasons so the user can report the real layout.
     const deps = makeRoute()
-    deps.store = {
+    deps.store = () => ({
       async accounts() { return [] },
       async status() { return { state: 'signed-out' } },
       async diagnose() {
@@ -62,8 +65,8 @@ describe('traeWebUsage', () => {
           ],
         }
       },
-    } as unknown as TraeUsageRouteOptions['store']
-    const result = await traeWebUsage(deps)
+    }) as unknown as ReturnType<TraeUsageRouteOptions['store']>
+    const result = await traeWebUsage(deps, 'cn')
     expect(result).toMatchObject({
       status: 'signed-out',
       searched: [
@@ -94,13 +97,14 @@ describe('traeWebUsage', () => {
       throw new Error(`unexpected fetch: ${url}`)
     }
     const deps = makeRoute({ fetchImpl })
-    const result = await traeWebUsage(deps)
+    const result = await traeWebUsage(deps, 'cn')
     expect(result.status).toBe('signed-in')
     if (result.status !== 'signed-in') return
     expect(result).toMatchObject({
       accountId: 'account-1',
       accountName: 'LaoDing',
       tokenExpiresAtMs: expiresAtMs,
+      region: 'cn',
       accounts: [{ id: 'account-1', accountName: 'LaoDing', edition: 'solo', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: true }],
       models: [{ id: 'DeepSeek-V4-Flash', name: 'DeepSeek-V4-Flash', contextWindow: 168_000, maxTokens: 32_000 }],
       rawChat: { state: 'protocol-gated', status: 400, checkedAtMs: 123 },
@@ -123,24 +127,189 @@ describe('traeWebUsage', () => {
   it('keeps discovered candidates separate from the saved runtime list', async () => {
     const deps = makeRoute()
     deps.discoverModels = async () => [{ id: 'new-model', name: 'New Model', contextWindow: 200_000 }]
-    const before = deps.displayModels()
-    await expect(deps.discoverModels()).resolves.toEqual([{ id: 'new-model', name: 'New Model', contextWindow: 200_000 }])
-    expect(deps.displayModels()).toEqual(before)
+    const before = deps.displayModels('cn')
+    await expect(deps.discoverModels?.('cn')).resolves.toEqual([{ id: 'new-model', name: 'New Model', contextWindow: 200_000 }])
+    expect(deps.displayModels('cn')).toEqual(before)
   })
 
   it('keeps account choices available when the selected credential cannot resolve', async () => {
     const deps = makeRoute()
-    deps.store.resolve = async () => { throw new Error('expired selected account') }
-    const result = await traeWebUsage(deps)
+    const base = deps.store('cn')
+    deps.store = () => Object.assign(Object.create(base) as typeof base, {
+      resolve: async () => { throw new Error('expired selected account') },
+    })
+    const result = await traeWebUsage(deps, 'cn')
     expect(result).toMatchObject({ status: 'signed-out', message: 'expired selected account', accounts: [{ id: 'account-1' }] })
   })
 
   it('degrades a failing credit fetch to creditsError', async () => {
     const fetchImpl = async () => { throw new Error('network down') }
     const deps = makeRoute({ fetchImpl })
-    const result = await traeWebUsage(deps)
+    const result = await traeWebUsage(deps, 'cn')
     expect(result.status).toBe('signed-in')
     if (result.status !== 'signed-in') return
     expect(result.creditsError).toContain('network down')
+  })
+})
+
+describe('traeWebUsage region routing', () => {
+  const intlCredential: TraeCredential = {
+    accessToken: 'eyJhbGciOiJSUzI1NiJ9.signature',
+    userId: 'intl-uid',
+    accountName: 'IntlLaoDing',
+    host: 'https://growsg-normal.trae.ai',
+    userRegion: 'SG',
+    expiresAtMs,
+    edition: 'solo-sg',
+    source: 'desktop',
+  }
+
+  function makeIntlRoute(payAnswer: () => Response): TraeUsageRouteOptions {
+    const client = new TraeUsageClient({ credential: async () => intlCredential, fetchImpl: async () => payAnswer() })
+    const seenRegions: TraeRegion[] = []
+    return {
+      store: () => ({
+        async accounts() { return [{ id: 'account-intl', accountName: 'IntlLaoDing', edition: 'solo-sg', region: 'ai', source: 'desktop', tokenExpiresAtMs: expiresAtMs, selected: true }] },
+        async status() { return { state: 'signed-in', edition: 'solo-sg', expiresAtMs, source: 'desktop' } },
+        async resolve() { return intlCredential },
+      }) as unknown as ReturnType<TraeUsageRouteOptions['store']>,
+      client: () => client,
+      displayModels: region => {
+        seenRegions.push(region)
+        return region === 'ai'
+          ? [{ id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview', contextWindow: 200_000 }]
+          : []
+      },
+      enabledModelIds: region => region === 'ai' ? ['gemini-3.1-pro'] : [],
+    }
+  }
+
+  it('serves the ai region its own directory and subscription status', async () => {
+    let payCalls = 0
+    const deps = makeIntlRoute(() => {
+      payCalls += 1
+      return new Response(JSON.stringify({
+        is_dollar_usage_billing: true, has_package: true,
+        trial_status: { is_in_trial: false },
+        enable_solo_lite: true,
+      }), { status: 200 })
+    })
+    const result = await traeWebUsage(deps, 'ai')
+    if (result.status !== 'signed-in') throw new Error('expected signed-in')
+    expect(result.region).toBe('ai')
+    expect(result.models.map(model => model.id)).toEqual(['gemini-3.1-pro'])
+    expect(result.enabledModelIds).toEqual(['gemini-3.1-pro'])
+    expect(result.credits).toBeUndefined()
+    expect(result.payStatus).toMatchObject({ isDollarUsageBilling: true, hasPackage: true, enableSoloLite: true })
+    expect(payCalls).toBe(1)
+  })
+
+  it('degrades an ai pay-status failure instead of failing the document', async () => {
+    const deps = makeIntlRoute(() => new Response('nope', { status: 500 }))
+    const result = await traeWebUsage(deps, 'ai')
+    if (result.status !== 'signed-in') throw new Error('expected signed-in')
+    expect(result.region).toBe('ai')
+    expect(result.payStatus).toBeUndefined()
+    expect(result.payStatusError).toContain('HTTP 500')
+  })
+})
+
+describe('registerTraeUsageRoute region dispatch', () => {
+  /** A captured route entry: the path plus its HTTP handler. */
+  interface CapturedEntry {
+    path: string
+    handler: (req: unknown, res: unknown) => Promise<void> | void
+  }
+
+  /** Mount the routes against a fake webServer; return the captures. */
+  async function mountRoutes(options: Partial<TraeUsageRouteOptions> = {}): Promise<CapturedEntry[]> {
+    const captured: CapturedEntry[] = []
+    const FakeWebServer = {
+      name: 'webServer',
+      inject: [] as const,
+      apply(ctx: Context) {
+        ctx.provide('webServer', {
+          register: (entry: { path: string }) => {
+            captured.push(entry as CapturedEntry)
+            return () => {}
+          },
+        })
+      },
+    }
+    const ctx = new Context()
+    await ctx.plugin(FakeWebServer)
+    const { registerTraeUsageRoute } = await import('../src/web-status.ts')
+    registerTraeUsageRoute(ctx, { ...makeRoute(), ...options })
+    await ctx.fiber.dispose()
+    return captured
+  }
+
+  /** Response recorder: json() only needs writeHead + end. */
+  function response(): {
+    res: { writeHead: (status: number, headers?: Record<string, string>) => void; end: (payload?: string) => void }
+    status: () => number
+    body: () => unknown
+  } {
+    let statusCode = 0
+    let payload = ''
+    return {
+      res: {
+        writeHead: (status: number) => { statusCode = status },
+        end: (body?: string) => { payload = body ?? '' },
+      },
+      status: () => statusCode,
+      body: () => JSON.parse(payload),
+    }
+  }
+
+  it('routes each region query to that region\'s store, defaulting to cn', async () => {
+    const seenRegions: TraeRegion[] = []
+    const captured = await mountRoutes({
+      store: region => {
+        seenRegions.push(region)
+        return makeRoute().store(region)
+      },
+    })
+    const usage = captured.find(entry => entry.path === TRAE_USAGE_PATH)
+    if (usage === undefined) throw new Error('usage route was not registered')
+
+    const first = response()
+    await usage.handler({ method: 'GET', url: `${TRAE_USAGE_PATH}?region=ai`, headers: {} }, first.res)
+    expect(first.status()).toBe(200)
+    expect(first.body()).toMatchObject({ status: 'signed-in', region: 'ai' })
+    expect(seenRegions).toEqual(['ai'])
+
+    const second = response()
+    await usage.handler({ method: 'GET', url: TRAE_USAGE_PATH, headers: {} }, second.res)
+    expect(second.status()).toBe(200)
+    expect(second.body()).toMatchObject({ region: 'cn' })
+    expect(seenRegions).toEqual(['ai', 'cn'])
+  })
+
+  it('refuses an unknown region with 400 before touching the store', async () => {
+    const seenRegions: TraeRegion[] = []
+    const captured = await mountRoutes({
+      store: region => {
+        seenRegions.push(region)
+        return makeRoute().store(region)
+      },
+    })
+    const usage = captured.find(entry => entry.path === TRAE_USAGE_PATH)
+    if (usage === undefined) throw new Error('usage route was not registered')
+
+    const { res, status, body } = response()
+    await usage.handler({ method: 'GET', url: `${TRAE_USAGE_PATH}?region=eu`, headers: {} }, res)
+    expect(status()).toBe(400)
+    expect(body()).toMatchObject({ error: 'unknown region' })
+    expect(seenRegions).toEqual([])
+  })
+
+  it('refuses non-loopback origins with 403', async () => {
+    const captured = await mountRoutes()
+    const usage = captured.find(entry => entry.path === TRAE_USAGE_PATH)
+    if (usage === undefined) throw new Error('usage route was not registered')
+    const { res, status } = response()
+    await usage.handler({ method: 'GET', url: TRAE_USAGE_PATH, headers: { origin: 'https://evil.example.com' } }, res)
+    expect(status()).toBe(403)
   })
 })
