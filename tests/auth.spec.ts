@@ -147,8 +147,13 @@ describe('TraeCredentialStore', () => {
     expect(soloStore.candidates().every(candidate => candidate.edition === 'solo')).toBe(true)
     const intlStore = new TraeCredentialStore({ edition: 'solo-sg', ownPath: '/tmp/unused-trae-own', refresh: async c => ({ accessToken: c.accessToken, expiresAtMs: c.expiresAtMs }) })
     const intlCandidates = intlStore.candidates()
-    expect(intlCandidates).toHaveLength(1)
-    expect(intlCandidates[0]).toMatchObject({ edition: 'solo-sg', source: 'desktop' })
+    // The candidate COUNT is platform-dependent by design: Linux probes several
+    // directory spellings per edition (`trae-solo` and `TRAE SOLO` both name the
+    // international SOLO install), while macOS and Windows resolve one. Assert
+    // the narrowing itself — every candidate is this edition's desktop install —
+    // rather than a host-specific count.
+    expect(intlCandidates.length).toBeGreaterThan(0)
+    expect(intlCandidates.every(candidate => candidate.edition === 'solo-sg' && candidate.source === 'desktop')).toBe(true)
   })
 
   it('normalizes the userRegion claim from the decrypted storage document', () => {

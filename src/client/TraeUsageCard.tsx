@@ -237,10 +237,15 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
         }
       }
 
-      setDraftModels(fresh)
-      setDraftEnabledIds(new Set(effectiveEnabled))
-      setDraftImageIds(autoImages)
-      setDraftContextBudgets(autoBudgets)
+      setDrafts(prev => ({
+        ...prev,
+        [activeRegion]: {
+          models: fresh,
+          enabledIds: new Set(effectiveEnabled),
+          imageIds: autoImages,
+          contextBudgets: autoBudgets,
+        },
+      }))
     } catch (error: unknown) {
       if (mounted.current) setStatusByRegion(prev => ({
         ...prev,
@@ -286,10 +291,22 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   const savedEnabledIds = status.status === 'signed-in' ? new Set(status.enabledModelIds) : new Set<string>()
   const defaultLargeEnabledIds = new Set(visibleModels.filter(m => (m.maxContextWindow ?? m.contextWindow ?? 0) >= 1_000_000).map(m => m.id))
   const initialEnabledIds = savedEnabledIds.size > 0 ? savedEnabledIds : (defaultLargeEnabledIds.size > 0 ? defaultLargeEnabledIds : new Set(visibleModels.map(m => m.id)))
-  const activeEnabledIds = draftEnabledIds ?? initialEnabledIds
-  const activeImageIds = draftImageIds ?? savedImageIds
-  const activeContextBudgets = draftContextBudgets ?? savedContextBudgets
-  const dirty = draftModels !== undefined || draftEnabledIds !== undefined || draftImageIds !== undefined || draftContextBudgets !== undefined
+  const activeEnabledIds = draft?.enabledIds ?? initialEnabledIds
+  const activeImageIds = draft?.imageIds ?? savedImageIds
+  const activeContextBudgets = draft?.contextBudgets ?? savedContextBudgets
+  const dirty = draft !== undefined
+
+  const editDraft = (mutate: (current: TraeDraft) => TraeDraft): void => {
+    setDrafts(prev => {
+      const current = prev[activeRegion] ?? {
+        models: [...(status.status === 'signed-in' ? status.models : [])],
+        enabledIds: new Set(activeEnabledIds),
+        imageIds: new Set(activeImageIds),
+        contextBudgets: { ...activeContextBudgets },
+      }
+      return { ...prev, [activeRegion]: mutate(current) }
+    })
+  }
 
   const toggleModel = (modelId: string): void => {
     editDraft(current => {
@@ -331,10 +348,15 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
       }
     }
 
-    setDraftModels([...visibleModels])
-    setDraftEnabledIds(effectiveEnabled)
-    setDraftImageIds(defaultImages)
-    setDraftContextBudgets(defaultBudgets)
+    setDrafts(prev => ({
+      ...prev,
+      [activeRegion]: {
+        models: [...visibleModels],
+        enabledIds: effectiveEnabled,
+        imageIds: defaultImages,
+        contextBudgets: defaultBudgets,
+      },
+    }))
   }
 
   const discardModels = (): void => {
@@ -349,13 +371,13 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
     if (settingsScope === undefined) return
     setSaving(true)
     try {
-      // Save this region's raw directory plus the pure selection. The Host
-      // derives the runtime catalog from these on save/restart, so re-opening
-      // the card re-reads Trae's current catalog instead of a stale snapshot.
-      await settingsScope.set('lastCatalog', visibleModels.map(model => ({ ...model, input: model.input ?? ['text'] })))
-      await settingsScope.set('enabledModelIds', [...activeEnabledIds])
-      await settingsScope.set('imageModelIds', [...activeImageIds].filter(id => activeEnabledIds.has(id)))
-      await settingsScope.set('contextBudgets', activeContextBudgets)
+      if (status.status !== 'signed-in') return
+      await settingsScope.set('regions', nextRegionSlots(configuredRegions, activeRegion, {
+        lastCatalog: visibleModels.map(model => ({ ...model, input: model.input ?? ['text'] })),
+        enabledModelIds: [...activeEnabledIds],
+        imageModelIds: [...activeImageIds].filter(id => activeEnabledIds.has(id)),
+        contextBudgets: activeContextBudgets,
+      }))
       discardModels()
       await refreshUsage(activeRegion)
     } finally {

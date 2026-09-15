@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.1 (2026-09-15)
+
+### Fixes
+
+- **修复纯 CLI 环境（WSL2 等）下「账号已识别但模型目录拉不出来、聊天也全部失败」**（issue #5 后续反馈）——1.4.2 让凭据层认得了 `traecli` 的裸 JWT，但**身份层只认桌面版 `storage.json`**：只装 CLI 的机器上没有任何桌面安装，`x-machine-id` / `x-device-id` 的来源解析直接抛「Trae storage was not found」，而目录查询与聊天请求的构造都需要它，于是模型目录永远停在兜底列表、选中模型也无法对话。现在身份解析在「桌面安装全部不存在」时降级到 **CLI 家目录自身的持久化标识**：
+  - `~/.trae-cn/argv.json` 的 `crash-reporter-id`（CLI 首次运行时写入的稳定 UUID）作为设备 ID；
+  - `~/.trae-cn/builtin/ide_version.json` 的 `version` 作为 `x-app-version`；
+  - 由设备 ID + 主机名 + 用户名做 SHA-256 得到 64 字符 `x-machine-id`（与官方客户端形态一致）。
+  全部取自 CLI 自己写下的稳定值，**不是每次请求随机生成**（延续本项目既有红线）；有桌面安装时仍优先使用桌面 `machineid` / `telemetry.machineId`。文件存在但内容损坏时依旧暴露真实解析错误，不被降级掩盖。
+- 修复 CI 在 ubuntu-latest 上的测试失败：`auth.spec.ts` 的 edition 收窄用例断言了候选数量为 1，而 Linux 会对每个 edition 并列探测多个目录拼写（`trae-solo` / `TRAE SOLO`），候选数为 2 —— 该多候选是 1.4.2 为 Linux 特意加的设计。测试改为断言收窄语义本身（候选数 > 0 且全部属于该 edition 的桌面安装），并已对 darwin / linux / win32 三平台逐一验证。
+
 ## 2.0.0 (2026-09-15)
 
 ### Breaking Changes

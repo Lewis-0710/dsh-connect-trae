@@ -60,7 +60,7 @@ const REQUEST_IMAGE_BUDGETS = {
   requestImageMaxBytes: 1_048_576,
 } as const
 
-function toPiModel(info: TraeModelInfo, baseUrl: string): Model<Api> {
+function toPiModel(info: TraeModelInfo, baseUrl: string, providerId: string = TRAE_PROVIDER): Model<Api> {
   const displayName = formatTraeModelDisplayName(info)
   return {
     id: info.id,
@@ -105,13 +105,13 @@ export interface TraeAdapter {
 
 export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
   const providerId = options.provider ?? TRAE_PROVIDER
-  const providerName = options.displayName ?? 'Trae'
+  const providerName = options.displayName ?? 'TraeWork'
   const buildModels = (): Model<Api>[] => options.catalog.current()
     .map(info => toPiModel(info, `${options.shim.baseUrl()}/v1`, providerId))
 
   const base = createProvider({
-    id: TRAE_PROVIDER,
-    name: 'TraeWork',
+    id: providerId,
+    name: providerName,
     auth: {
       apiKey: {
         name: 'Trae loopback secret',
@@ -128,8 +128,8 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
   })
   const provider: Provider = { ...base, getModels: () => buildModels() }
   const profile: ResolvedPiAiProviderProfile = {
-    provider: TRAE_PROVIDER,
-    displayName: 'TraeWork',
+    provider: providerId,
+    displayName: providerName,
     streamIdleTimeoutMs: TRAE_STREAM_IDLE_TIMEOUT_MS,
     retryPolicy: resolveRetryPolicy(undefined, 'dsh-connect-trae retryPolicy'),
     configuredMaxTokens: new Map(),

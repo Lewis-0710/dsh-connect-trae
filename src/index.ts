@@ -13,10 +13,10 @@ import {
   TRAE_PROVIDERS,
 } from './adapter.ts'
 import type { TraeAdapter } from './adapter.ts'
-import { TraeCredentialStore } from './auth.ts'
-import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, formatTraeModelDisplayName, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeModelInfo } from './catalog.ts'
-import { refreshTraeCredential } from './refresh.ts'
-import { pickTraeStorageIdentity, readTraeIdentity } from './identity.ts'
+import { TraeCredentialStore, type TraeCredential } from './auth.ts'
+import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, FALLBACK_TRAE_MODELS_AI, fallbackModelsFor, formatTraeModelDisplayName, isMembershipModel, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeModelInfo } from './catalog.ts'
+import { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
+import { pickTraeStorageIdentity, readTraeIdentity, resolveTraeIdentity } from './identity.ts'
 import { traeStorageCandidates, type TraeEdition } from './paths.ts'
 import { regionOfCredential, regionOfEdition, regionOfHost, regionOfUserRegion, REGION_GATEWAYS, type TraeRegion, type TraeRegionGateways } from './region.ts'
 import { createTraeShim } from './shim.ts'
@@ -32,11 +32,35 @@ import { TraeDelegatingUpstreamClient } from './delegating-upstream.ts'
 import { TraeUsageClient } from './usage.ts'
 import { registerTraeUsageRoute } from './web-status.ts'
 
-export { createTraeAdapter, TRAE_PROVIDER, TRAE_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
-export { normalizeTraeCredential, traeOwnAuthPath, TraeCredentialStore, type TraeCredential } from './auth.ts'
-export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, formatTraeModelDisplayName, isMembershipModel, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
+export {
+  createTraeAdapter,
+  regionOfTraeProvider,
+  TRAE_AI_PROVIDER,
+  TRAE_PROVIDER,
+  TRAE_PROVIDER_DISPLAY_NAMES,
+  TRAE_PROVIDERS,
+  TRAE_STREAM_IDLE_TIMEOUT_MS,
+  type TraeAdapter,
+} from './adapter.ts'
+export {
+  legacyTraeOwnAuthPath,
+  normalizeTraeCredential,
+  traeOwnAuthPath,
+  TraeCredentialStore,
+  type TraeCredential,
+} from './auth.ts'
+export {
+  regionOfCredential,
+  regionOfEdition,
+  regionOfHost,
+  regionOfUserRegion,
+  REGION_GATEWAYS,
+  type TraeRegion,
+  type TraeRegionGateways,
+} from './region.ts'
+export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, FALLBACK_TRAE_MODELS_AI, fallbackModelsFor, formatTraeModelDisplayName, isMembershipModel, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
 export { decryptTraeStorageValue, parseTraeAuthValue, parseTraeStorageDocument } from './decrypt.ts'
-export { identityHeaders, pickTraeStorageIdentity, readTraeIdentity, type TraeIdentity } from './identity.ts'
+export { identityHeaders, pickTraeStorageIdentity, readTraeCliIdentity, readTraeIdentity, resolveTraeIdentity, type TraeIdentity } from './identity.ts'
 export { parseObservedModelConfig, type TraeObservedModelConfig } from './model-config.ts'
 export { parseTraeCachedModel, readTraeCachedModel, type TraeCachedModelConfig } from './model-cache.ts'
 export { parseTraeModelExtraConfigLogLine, parseTraeRawChatBehaviorConfig, type TraeRawChatBehaviorConfig } from './model-extra-config.ts'
@@ -342,8 +366,12 @@ export function apply(ctx: Context, config: Config): void {
         ? traeStorageCandidates().filter(item => item.source === 'desktop'
           && (hint !== undefined ? item.edition === hint : regionOfEdition(item.edition) === region))
         : [{ edition: hint ?? (region === 'ai' ? 'sg' as const : 'solo' as const), path: config.authFile, source: 'desktop' as const }]
-      if (candidates.length === 0) throw new Error('Trae storage was not found')
-      return pickTraeStorageIdentity(candidates)
+      // Desktop storage first; a machine with only the CLI (`traecli`, the WSL2
+      // case) has no storage.json at all, and identity resolution falls back to
+      // the CLI home's own deterministic identifiers instead of failing every
+      // directory refresh and chat request.
+      const cliEdition = hint ?? (region === 'ai' ? 'solo-sg' as const : 'cn' as const)
+      return resolveTraeIdentity(candidates, cliEdition)
     }
     /**
      * Resolution failures degrade to omitting DeviceInfo (its being required

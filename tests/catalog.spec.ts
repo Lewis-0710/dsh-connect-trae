@@ -6,6 +6,8 @@ import {
   deriveCatalog,
   discoveredCatalog,
   FALLBACK_TRAE_MODELS,
+  FALLBACK_TRAE_MODELS_AI,
+  fallbackModelsFor,
   formatTraeModelDisplayName,
   isMembershipModel,
   mergeTraeModelSources,

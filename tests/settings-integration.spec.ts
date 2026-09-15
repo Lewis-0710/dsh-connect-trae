@@ -142,7 +142,7 @@ describe('Trae provider registration', () => {
       await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
 
       // Saving the directory persists the multiplier; the adapter then exposes
-      // the DSH-facing name `Name · x<rate>` while the model id stays pure.
+      // the DSH-facing name (0.79x) while the model id stays pure.
       await ctx.settings.update(Trae.TRAE_SETTINGS_NS, {
         lastCatalog: [
           { id: 'glm-5.2', name: 'GLM-5.2', input: ['text'], creditMultiplier: 0.79 },
@@ -151,9 +151,10 @@ describe('Trae provider registration', () => {
         enabledModelIds: ['glm-5.2'],
       })
 
-    const models = await ctx.llm.listModels('trae')
-    const glm = models.find(model => model.id === 'glm-5.2')
-    expect(glm?.name).toBe('GLM-5.2 (0.79x)')
+      const models = await ctx.llm.listModels('trae')
+      const glm = models.find(model => model.id === 'glm-5.2')
+      expect(glm?.name).toBe('GLM-5.2 (0.79x)')
+    } finally { await restore() }
   })
 })
 
