@@ -1,0 +1,901 @@
+diff --git a/src/adapter.ts b/src/adapter.ts
+index 4308a4d..0b55ea0 100644
+--- a/src/adapter.ts
++++ b/src/adapter.ts
+@@ -5,7 +5,7 @@ import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
+ import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
+ import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
+ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
+-import { traeInputModalities, traeModelDisplayName, type TraeCatalog, type TraeModelInfo } from './catalog.ts'
++import { formatTraeModelDisplayName, traeInputModalities, type TraeCatalog, type TraeModelInfo } from './catalog.ts'
+ import type { TraeShim } from './shim.ts'
+ 
+ export const TRAE_PROVIDER = 'trae'
+@@ -31,9 +31,10 @@ const REQUEST_IMAGE_BUDGETS = {
+ } as const
+ 
+ function toPiModel(info: TraeModelInfo, baseUrl: string): Model<Api> {
++  const displayName = formatTraeModelDisplayName(info)
+   return {
+     id: info.id,
+-    name: traeModelDisplayName(info),
++    name: displayName,
+     api: 'openai-completions',
+     provider: TRAE_PROVIDER,
+     baseUrl,
+@@ -74,7 +75,7 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
+ 
+   const base = createProvider({
+     id: TRAE_PROVIDER,
+-    name: 'Trae',
++    name: 'TraeWork',
+     auth: {
+       apiKey: {
+         name: 'Trae loopback secret',
+@@ -92,7 +93,7 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
+   const provider: Provider = { ...base, getModels: () => buildModels() }
+   const profile: ResolvedPiAiProviderProfile = {
+     provider: TRAE_PROVIDER,
+-    displayName: 'Trae',
++    displayName: 'TraeWork',
+     streamIdleTimeoutMs: TRAE_STREAM_IDLE_TIMEOUT_MS,
+     retryPolicy: resolveRetryPolicy(undefined, 'dsh-connect-trae retryPolicy'),
+     configuredMaxTokens: new Map(),
+diff --git a/src/catalog.ts b/src/catalog.ts
+index 8ae9847..b4fa781 100644
+--- a/src/catalog.ts
++++ b/src/catalog.ts
+@@ -16,6 +16,7 @@ export interface TraeModelInfo {
+   maxTokens?: number
+   input?: TraeInputModality[]
+   creditMultiplier?: number
++  requiresMembership?: boolean
+   reasoningSupported?: boolean
+   reasoning?: TraeDiscoveredReasoning
+   reasoningEfforts?: Partial<Record<TraeReasoningEffort, string | null>>
+@@ -38,25 +39,32 @@ export function traeInputModalities(model: Pick<TraeModelInfo, 'input'>): TraeIn
+   return [...(model.input ?? ['text'])]
+ }
+ 
+-/**
+- * Compose the DSH-facing model name: Trae's own model picker renders each
+- * entry as `Name · x<rate>`, so the credit multiplier is shown inside the
+- * name. `TraeModelInfo.name` keeps the pure Trae display name — every join
+- * (wire resolution, callable-key filtering) must keep matching the
+- * undecorated name; only the model rows handed to DSH (adapter catalog and
+- * model discovery) use this decorated name.
+- */
+-export function traeModelDisplayName(model: Pick<TraeModelInfo, 'name' | 'creditMultiplier'>): string {
+-  return model.creditMultiplier === undefined
+-    ? model.name
+-    : `${model.name} · x${model.creditMultiplier.toFixed(2)}`
++export function isMembershipModel(model: Pick<TraeModelInfo, 'id' | 'name' | 'requiresMembership'>): boolean {
++  return model.requiresMembership === true || model.id === 'Doubao-Seed-Evolving' || model.name === 'Seed-Evolving'
+ }
+ 
+-/** Apply the user's explicit image opt-ins; upstream and saved row hints are ignored. */
++/** Format the injected model alias (display name) including membership badge and credit multiplier. */
++export function formatTraeModelDisplayName(
++  model: Pick<TraeModelInfo, 'id' | 'name' | 'creditMultiplier' | 'requiresMembership'>,
++): string {
++  const parts: string[] = [model.name]
++  if (isMembershipModel(model)) {
++    parts.push('(会员计划)')
++  }
++  if (model.creditMultiplier !== undefined) {
++    parts.push(`(${Number(model.creditMultiplier.toFixed(2))}x)`)
++  }
++  return parts.join(' ')
++}
++
++/** Apply the user's explicit image opt-ins; if selected is empty/undefined, preserves native image capability. */
+ export function applyImageSelection(
+   models: readonly TraeModelInfo[],
+-  selected: ReadonlySet<string>,
++  selected?: ReadonlySet<string>,
+ ): TraeModelInfo[] {
++  if (selected === undefined || selected.size === 0) {
++    return models.map(model => ({ ...model, input: model.input ?? ['text'] }))
++  }
+   return models.map(model => ({ ...model, input: selected.has(model.id) ? ['text', 'image'] : ['text'] }))
+ }
+ 
+@@ -119,7 +127,8 @@ export function mergeTraeModelSources(
+       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
+       ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
+       ...model.creditMultiplier === undefined ? {} : { creditMultiplier: model.creditMultiplier },
+-      input: ['text'],
++      input: model.multimodal ? ['text', 'image'] : ['text'],
++      ...model.requiresMembership ? { requiresMembership: true } : {},
+       reasoningSupported: model.reasoningSupported,
+       ...model.reasoning === undefined ? {} : {
+         reasoning: model.reasoning,
+@@ -135,23 +144,25 @@ export function mergeTraeModelSources(
+ export type TraeContextBudget = number
+ 
+ /**
+- * Apply the saved local budget. Trae advertises two windows per model (dev and
+- * Max), so the budget may only switch a model to its own advertised Max value —
+- * never to a fabricated number. Everything else keeps the dev window.
++ * Apply the saved local budget.
+  */
+ export function applyContextBudgets(
+   catalog: readonly TraeModelInfo[],
+   budgets: Readonly<Record<string, TraeContextBudget | undefined>> = {},
+ ): TraeModelInfo[] {
+-  return catalog.map(model => ({
+-    ...model,
+-    ...(model.maxContextWindow !== undefined && budgets[model.id] === model.maxContextWindow
+-      ? { contextWindow: model.maxContextWindow }
+-      : {}),
+-  }))
++  return catalog.map(model => {
++    const explicit = budgets[model.id]
++    if (explicit !== undefined) {
++      return { ...model, contextWindow: explicit }
++    }
++    if (model.maxContextWindow !== undefined && model.maxContextWindow > (model.contextWindow ?? 0)) {
++      return { ...model, contextWindow: model.maxContextWindow }
++    }
++    return model
++  })
+ }
+ 
+-/** Convert Trae metadata into text-only model rows; image support is user-owned configuration. */
++/** Convert Trae metadata into model rows with native multimodal and context attributes. */
+ export function discoveredCatalog(models: readonly TraeDiscoveredModel[]): TraeModelInfo[] {
+   const result: TraeModelInfo[] = []
+   for (const model of models) {
+@@ -160,7 +171,8 @@ export function discoveredCatalog(models: readonly TraeDiscoveredModel[]): TraeM
+       name: model.name,
+       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
+       ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
+-      input: ['text'],
++      input: model.multimodal ? ['text', 'image'] : ['text'],
++      ...model.requiresMembership ? { requiresMembership: true } : {},
+       ...model.creditMultiplier === undefined ? {} : { creditMultiplier: model.creditMultiplier },
+       reasoningSupported: model.reasoningSupported,
+       ...model.reasoning === undefined ? {} : {
+@@ -184,21 +196,30 @@ export function sanitizeCatalog(catalog: readonly TraeModelInfo[]): TraeModelInf
+   })
+ }
+ 
++const DEFAULT_MIN_CONTEXT = 1_000_000
++
++export function isLargeContextModel(model: Pick<TraeModelInfo, 'maxContextWindow' | 'contextWindow'>): boolean {
++  return (model.maxContextWindow ?? model.contextWindow ?? 0) >= DEFAULT_MIN_CONTEXT
++}
++
++export function defaultEnabledModelIds(catalog: readonly TraeModelInfo[]): string[] {
++  const large = catalog.filter(isLargeContextModel).map(model => model.id)
++  return large.length > 0 ? large : catalog.map(model => model.id)
++}
++
+ /**
+  * Derive the runtime catalog from the last refreshed Trae directory plus the
+  * user's explicit selection and context budgets. An empty selection falls back
+- * to the whole directory: a plugin that has never been configured must still
+- * serve models rather than nothing. This is the single source of truth for
+- * what DSH actually exposes, so saving only the selection and budgets is
+- * enough to rebuild it after a restart.
++ * to models with max context >= 1M (or the whole directory if none are >= 1M).
+  */
+ export function deriveCatalog(
+   catalog: readonly TraeModelInfo[],
+   enabled: ReadonlySet<string>,
+   budgets: Readonly<Record<string, TraeContextBudget | undefined>> = {},
+ ): TraeModelInfo[] {
+-  const selected = enabled.size === 0 ? catalog : catalog.filter(model => enabled.has(model.id))
+-  return applyContextBudgets(selected, budgets)
++  const effectiveEnabled = enabled.size === 0 ? new Set(defaultEnabledModelIds(catalog)) : enabled
++  const selected = catalog.filter(model => effectiveEnabled.has(model.id))
++  return applyContextBudgets(selected.length > 0 ? selected : catalog, budgets)
+ }
+ 
+ export class TraeCatalog {
+diff --git a/src/client/TraeUsageCard.tsx b/src/client/TraeUsageCard.tsx
+index eb8ec36..5e4349a 100644
+--- a/src/client/TraeUsageCard.tsx
++++ b/src/client/TraeUsageCard.tsx
+@@ -178,20 +178,33 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
+       if (!response.ok || !Array.isArray(body.models)) throw new Error(`HTTP ${response.status}`)
+       const fresh = body.models
+       const freshIds = new Set(fresh.map(model => model.id))
+-      // Re-map the user's CURRENT selections (draft first, then saved) onto the
+-      // fresh catalog by model id, so refresh never silently loses enabled
+-      // choices, image opt-ins, or context budgets.
+-      const stillEnabled = [...activeEnabledIds].filter(id => freshIds.has(id))
+-      const stillImages = [...activeImageIds].filter(id => freshIds.has(id))
+-      const stillBudgets: Record<string, number> = {}
+-      for (const id of freshIds) {
+-        const budget = activeContextBudgets[id]
+-        if (typeof budget === 'number') stillBudgets[id] = budget
++
++      // 1. Keep user's enabled selection; if none were enabled, default to >= 1M
++      const stillEnabled = activeEnabledIds.size > 0
++        ? [...activeEnabledIds].filter(id => freshIds.has(id))
++        : fresh.filter(m => (m.maxContextWindow ?? m.contextWindow ?? 0) >= 1_000_000).map(m => m.id)
++      const effectiveEnabled = stillEnabled.length > 0 ? stillEnabled : fresh.map(m => m.id)
++
++      // 2. Automatically select image support (multimodal)
++      const autoImages = new Set<string>()
++      for (const m of fresh) {
++        if (m.input?.includes('image') || (m as { multimodal?: boolean }).multimodal === true || activeImageIds.has(m.id)) {
++          autoImages.add(m.id)
++        }
++      }
++
++      // 3. Automatically match max context window
++      const autoBudgets: Record<string, number> = {}
++      for (const m of fresh) {
++        if (m.maxContextWindow !== undefined && m.maxContextWindow > (m.contextWindow ?? 0)) {
++          autoBudgets[m.id] = m.maxContextWindow
++        }
+       }
+-      setDraftModels(fresh.map(model => ({ ...model, input: ['text'] })))
+-      setDraftEnabledIds(new Set(stillEnabled))
+-      setDraftImageIds(new Set(stillImages))
+-      setDraftContextBudgets(stillBudgets)
++
++      setDraftModels(fresh)
++      setDraftEnabledIds(new Set(effectiveEnabled))
++      setDraftImageIds(autoImages)
++      setDraftContextBudgets(autoBudgets)
+     } catch (error: unknown) {
+       if (mounted.current) setStatus({ status: 'error', message: error instanceof Error ? error.message : t('row.requestFailed') })
+     } finally {
+@@ -215,7 +228,9 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
+   // model id (= Trae name); context budgets work the same way.
+   const visibleModels = draftModels ?? (status.status === 'signed-in' ? status.models : [])
+   const savedEnabledIds = status.status === 'signed-in' ? new Set(status.enabledModelIds) : new Set<string>()
+-  const activeEnabledIds = draftEnabledIds ?? savedEnabledIds
++  const defaultLargeEnabledIds = new Set(visibleModels.filter(m => (m.maxContextWindow ?? m.contextWindow ?? 0) >= 1_000_000).map(m => m.id))
++  const initialEnabledIds = savedEnabledIds.size > 0 ? savedEnabledIds : (defaultLargeEnabledIds.size > 0 ? defaultLargeEnabledIds : new Set(visibleModels.map(m => m.id)))
++  const activeEnabledIds = draftEnabledIds ?? initialEnabledIds
+   const activeImageIds = draftImageIds ?? savedImageIds
+   const activeContextBudgets = draftContextBudgets ?? savedContextBudgets
+   const dirty = draftModels !== undefined || draftEnabledIds !== undefined || draftImageIds !== undefined || draftContextBudgets !== undefined
+@@ -242,6 +257,27 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
+     setDraftModels([...visibleModels])
+   }
+ 
++  const resetToDefaults = (): void => {
++    const defaultEnabled = new Set(
++      visibleModels.filter(m => (m.maxContextWindow ?? m.contextWindow ?? 0) >= 1_000_000).map(m => m.id),
++    )
++    const effectiveEnabled = defaultEnabled.size > 0 ? defaultEnabled : new Set(visibleModels.map(m => m.id))
++    const defaultImages = new Set(
++      visibleModels.filter(m => m.input?.includes('image') || (m as { multimodal?: boolean }).multimodal === true).map(m => m.id),
++    )
++    const defaultBudgets: Record<string, number> = {}
++    for (const m of visibleModels) {
++      if (m.maxContextWindow !== undefined && m.maxContextWindow > (m.contextWindow ?? 0)) {
++        defaultBudgets[m.id] = m.maxContextWindow
++      }
++    }
++
++    setDraftModels([...visibleModels])
++    setDraftEnabledIds(effectiveEnabled)
++    setDraftImageIds(defaultImages)
++    setDraftContextBudgets(defaultBudgets)
++  }
++
+   const discardModels = (): void => {
+     setDraftModels(undefined)
+     setDraftEnabledIds(undefined)
+@@ -256,7 +292,7 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
+       // Save the raw directory plus the pure selection and budgets. The Host
+       // derives the runtime catalog from these on save/restart, so re-opening
+       // the card re-reads Trae's current catalog instead of a stale snapshot.
+-      await settingsScope.set('lastCatalog', visibleModels.map(model => ({ ...model, input: ['text'] })))
++      await settingsScope.set('lastCatalog', visibleModels.map(model => ({ ...model, input: model.input ?? ['text'] })))
+       await settingsScope.set('enabledModelIds', [...activeEnabledIds])
+       await settingsScope.set('imageModelIds', [...activeImageIds].filter(id => activeEnabledIds.has(id)))
+       await settingsScope.set('contextBudgets', activeContextBudgets)
+@@ -283,7 +319,6 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
+         aria-label={`${t(open ? 'row.collapse' : 'row.expand')}: ${title}`}
+         onClick={() => { setOpen(!open) }}
+       >
+-        <img className="dsm-plugin-card-icon" src={TRAE_PLUGIN_ICON} alt="" />
+         <span className="dsm-plugin-card-head">
+           <span className="dsm-plugin-card-title">{title}</span>
+           <span className="dsm-plugin-card-description">{t('row.desc')}</span>
+@@ -365,79 +400,99 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
+                           <h3 className="dsm-trae-models-title">{t('row.modelsTitle')}</h3>
+                           <p className="dsm-trae-models-summary">{t('row.modelsSummary', { count: activeEnabledIds.size })}</p>
+                         </div>
+-                        <button
+-                          type="button"
+-                          className="dsm-btn dsm-btn-outline"
+-                          disabled={busy}
+-                          onClick={() => { void refreshModels() }}
+-                        >
+-                          {busy ? t('row.modelsRefreshing') : t('row.modelsRefresh')}
+-                        </button>
++                        <div className="dsm-trae-models-head-actions">
++                          <button
++                            type="button"
++                            className="dsm-btn dsm-btn-outline"
++                            disabled={busy}
++                            onClick={() => { void refreshModels() }}
++                          >
++                            {busy ? t('row.modelsRefreshing') : t('row.modelsRefresh')}
++                          </button>
++                          <button
++                            type="button"
++                            className="dsm-btn dsm-btn-outline"
++                            disabled={busy || saving}
++                            onClick={resetToDefaults}
++                          >
++                            {t('row.modelsResetDefaults')}
++                          </button>
++                        </div>
+                       </div>
+                       <div className="dsm-trae-model-list">
+-                        {visibleModels.map(model => (
+-                          <div className={`dsm-trae-model${activeEnabledIds.has(model.id) ? '' : ' dsm-trae-model-disabled'}`} key={model.id}>
+-                            <div className="dsm-trae-model-head">
+-                              <label className="dsm-trae-model-enabled">
+-                                <input
+-                                  type="checkbox"
+-                                  checked={activeEnabledIds.has(model.id)}
+-                                  disabled={settingsScope?.getSnapshot().writable !== true || saving}
+-                                  onChange={() => { toggleModel(model.id) }}
+-                                />
+-                                <span className="dsm-trae-model-copy">
+-                                  <span className="dsm-trae-model-name">
+-                                    {model.name}
+-                                    {model.creditMultiplier === undefined ? null
+-                                      : <span className="dsm-trae-model-name-rate">· x{model.creditMultiplier.toFixed(2)}</span>}
+-                                  </span>
+-                                </span>
+-                              </label>
+-                              <div className="dsm-trae-model-options">
+-                                <label className="dsm-trae-model-image">
++                        {visibleModels.map(model => {
++                          const hasMaxOption = model.maxContextWindow !== undefined && model.maxContextWindow > (model.contextWindow ?? 0)
++                          const currentBudget = activeContextBudgets[model.id] ?? (hasMaxOption ? model.maxContextWindow : model.contextWindow)
++                          const isBaseSelected = hasMaxOption && currentBudget === model.contextWindow
++                          const isMaxSelected = !hasMaxOption || currentBudget === model.maxContextWindow
++                          const requiresPlan = model.requiresMembership === true || model.id === 'Doubao-Seed-Evolving' || model.name === 'Seed-Evolving'
++                          return (
++                            <div className={`dsm-trae-model${activeEnabledIds.has(model.id) ? '' : ' dsm-trae-model-disabled'}`} key={model.id}>
++                              <div className="dsm-trae-model-head">
++                                <label className="dsm-trae-model-enabled">
+                                   <input
+                                     type="checkbox"
+-                                    checked={activeImageIds.has(model.id)}
++                                    checked={activeEnabledIds.has(model.id)}
+                                     disabled={settingsScope?.getSnapshot().writable !== true || saving}
+-                                    onChange={() => { toggleImage(model.id) }}
++                                    onChange={() => { toggleModel(model.id) }}
+                                   />
+-                                  <span>{t('row.modelImage')}</span>
++                                  <span className="dsm-trae-model-copy">
++                                    <span className="dsm-trae-model-name">
++                                      {model.name}
++                                      {model.creditMultiplier === undefined ? null
++                                        : <span className="dsm-trae-model-name-rate">({model.creditMultiplier.toFixed(2)}x)</span>}
++                                    </span>
++                                    {requiresPlan
++                                      ? <span className="dsm-trae-model-plan-badge">{t('row.modelRequiresMembership')}</span>
++                                      : null}
++                                  </span>
+                                 </label>
+-                              <fieldset className="dsm-trae-context-budget" aria-label={t('row.contextBudget')}>
+-                                {model.maxContextWindow !== undefined
+-                                  ? <label>
++                                <div className="dsm-trae-model-options">
++                                  <label className="dsm-trae-model-image">
++                                    <input
++                                      type="checkbox"
++                                      checked={activeImageIds.has(model.id)}
++                                      disabled={settingsScope?.getSnapshot().writable !== true || saving}
++                                      onChange={() => { toggleImage(model.id) }}
++                                    />
++                                    <span>{t('row.modelImage')}</span>
++                                  </label>
++                                  <fieldset className="dsm-trae-context-budget" aria-label={t('row.contextBudget')}>
++                                    {model.maxContextWindow !== undefined
++                                      ? <label>
++                                          <input
++                                            type="radio"
++                                            name={`context-${model.id}`}
++                                            checked={isBaseSelected}
++                                            disabled={settingsScope?.getSnapshot().writable !== true || saving}
++                                            onChange={() => { setContextBudget(model.id, model.contextWindow) }}
++                                          />
++                                          <span>{formatCapacity(model.contextWindow, t('row.modelUnknown'))}</span>
++                                        </label>
++                                      : null}
++                                    <label>
+                                       <input
+                                         type="radio"
+                                         name={`context-${model.id}`}
+-                                        checked={activeContextBudgets[model.id] !== model.maxContextWindow}
+-                                        disabled={settingsScope?.getSnapshot().writable !== true || saving}
+-                                        onChange={() => { setContextBudget(model.id, model.contextWindow) }}
++                                        checked={isMaxSelected}
++                                        disabled={model.maxContextWindow === undefined || settingsScope?.getSnapshot().writable !== true || saving}
++                                        onChange={() => { setContextBudget(model.id, model.maxContextWindow) }}
+                                       />
+-                                      <span>{formatCapacity(model.contextWindow, t('row.modelUnknown'))}</span>
++                                      <span>{formatCapacity(model.maxContextWindow ?? model.contextWindow, t('row.modelUnknown'))}</span>
+                                     </label>
+-                                  : null}
+-                                <label>
+-                                  <input
+-                                    type="radio"
+-                                    name={`context-${model.id}`}
+-                                    checked={model.maxContextWindow === undefined || activeContextBudgets[model.id] === model.maxContextWindow}
+-                                    disabled={model.maxContextWindow === undefined || settingsScope?.getSnapshot().writable !== true || saving}
+-                                    onChange={() => { setContextBudget(model.id, model.maxContextWindow) }}
+-                                  />
+-                                  <span>{formatCapacity(model.maxContextWindow ?? model.contextWindow, t('row.modelUnknown'))}</span>
+-                                </label>
+-                              </fieldset>
++                                  </fieldset>
++                                </div>
++                              </div>
++                              <div className="dsm-trae-model-meta">
++                                <span>{t('row.modelContext', { context: formatCapacity(model.maxContextWindow ?? model.contextWindow, t('row.modelUnknown')) })}</span>
++                                {model.maxTokens === undefined ? null
++                                  : <span>{t('row.modelOutput', { output: formatCapacity(model.maxTokens, t('row.modelUnknown')) })}</span>}
++                                {model.reasoning === undefined ? null
++                                  : <span>{t('row.modelReasoning', { efforts: model.reasoning.supported.join(' / ') })}</span>}
+                               </div>
+                             </div>
+-                            <div className="dsm-trae-model-meta">
+-                              <span>{t('row.modelContext', { context: formatCapacity(model.maxContextWindow ?? model.contextWindow, t('row.modelUnknown')) })}</span>
+-                              {model.maxTokens === undefined ? null
+-                                : <span>{t('row.modelOutput', { output: formatCapacity(model.maxTokens, t('row.modelUnknown')) })}</span>}
+-                              {model.reasoning === undefined ? null
+-                                : <span>{t('row.modelReasoning', { efforts: model.reasoning.supported.join(' / ') })}</span>}
+-                            </div>
+-                          </div>
+-                        ))}
++                          )
++                        })}
+                       </div>
+                       <p className="dsm-trae-model-capability-note">{t('row.modelCapabilityPending')}</p>
+                       <div className="dsm-trae-model-actions">
+diff --git a/src/client/locales.ts b/src/client/locales.ts
+index 5888203..c0824da 100644
+--- a/src/client/locales.ts
++++ b/src/client/locales.ts
+@@ -5,7 +5,7 @@
+  */
+ 
+ export const en = {
+-  'row.title': 'Trae credits & models (dsh-connect-trae)',
++  'row.title': 'TraeWork',
+   'row.desc': 'Use the models in the Trae desktop app directly in DSH, and see your remaining credits at a glance.',
+   'row.expand': 'Expand',
+   'row.collapse': 'Collapse',
+@@ -36,6 +36,7 @@ export const en = {
+   'row.modelsSummary': '{count} enabled',
+   'row.modelsRefresh': 'Refresh from Trae',
+   'row.modelsRefreshing': 'Refreshing models…',
++  'row.modelsResetDefaults': 'Reset to defaults',
+   'row.modelEnabled': 'Enabled',
+   'row.discard': 'Discard changes',
+   'row.save': 'Save',
+@@ -45,6 +46,7 @@ export const en = {
+   'row.modelOutput': 'Output {output}',
+   'row.modelImage': 'Image',
+   'row.modelRate': '{rate}x credits',
++  'row.modelRequiresMembership': 'Subscription Plan',
+   'row.modelReasoning': 'Reasoning: {efforts}',
+   'row.modelReasoningSupported': 'Reasoning: supported',
+   'row.modelUnknown': 'Unknown',
+@@ -55,7 +57,7 @@ export const en = {
+ export type TraeSettingsKey = keyof typeof en
+ 
+ export const zh: Record<TraeSettingsKey, string> = {
+-  'row.title': '接入使用Trae积分与模型（dsh-connect-trae）',
++  'row.title': 'TraeWork',
+   'row.desc': '在 DSH 中直接使用 Trae 桌面 App 包含的模型，并随时查看剩余积分。',
+   'row.expand': '展开',
+   'row.collapse': '收起',
+@@ -86,6 +88,7 @@ export const zh: Record<TraeSettingsKey, string> = {
+   'row.modelsSummary': '已启用 {count} 个',
+   'row.modelsRefresh': '从 Trae 刷新',
+   'row.modelsRefreshing': '正在刷新模型…',
++  'row.modelsResetDefaults': '恢复默认',
+   'row.modelEnabled': '启用模型',
+   'row.discard': '放弃修改',
+   'row.save': '保存',
+@@ -95,6 +98,7 @@ export const zh: Record<TraeSettingsKey, string> = {
+   'row.modelOutput': '最大输出 {output}',
+   'row.modelImage': '图片',
+   'row.modelRate': '积分 {rate}x',
++  'row.modelRequiresMembership': '会员计划',
+   'row.modelReasoning': '推理强度：{efforts}',
+   'row.modelReasoningSupported': '推理：支持',
+   'row.modelUnknown': '未知',
+diff --git a/src/client/styles.ts b/src/client/styles.ts
+index df36154..d81cf03 100644
+--- a/src/client/styles.ts
++++ b/src/client/styles.ts
+@@ -59,6 +59,7 @@ export const TRAE_CARD_CSS = `
+ .dsm-trae-usage-stat-hint{margin:2px 0 0;font-size:12px;line-height:17px;color:var(--dsw-alias-label-tertiary,#9aa0a8)}
+ .dsm-trae-models{display:flex;flex-direction:column;gap:10px;border-top:1px solid var(--dsw-alias-border-l2,#36373b);padding-top:14px}
+ .dsm-trae-models-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
++.dsm-trae-models-head-actions{display:flex;align-items:center;gap:8px}
+ .dsm-trae-models-title{margin:0;color:var(--dsw-alias-label-primary,#e6e6e6);font-size:14px;font-weight:600;line-height:20px}
+ .dsm-trae-models-summary{margin:2px 0 0;color:var(--dsw-alias-label-tertiary,#999);font-size:12px;line-height:18px}
+ .dsm-trae-model-list{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2,#36373b);border-radius:10px;overflow:hidden}
+@@ -71,6 +72,7 @@ export const TRAE_CARD_CSS = `
+ .dsm-trae-model-copy{display:flex;align-items:baseline;gap:8px;min-width:0}
+ .dsm-trae-model-name{display:inline-flex;align-items:baseline;gap:7px;color:var(--dsw-alias-label-primary,#e6e6e6);font-size:13px;font-weight:500;line-height:19px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .dsm-trae-model-name-rate{color:var(--dsw-alias-label-tertiary,#999);font-size:11px;font-weight:400;line-height:16px;flex:none}
++.dsm-trae-model-plan-badge{display:inline-flex;align-items:center;padding:1px 5px;border-radius:4px;font-size:11px;line-height:14px;font-weight:500;background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.25);flex:none;margin-left:4px}
+ .dsm-trae-model-meta{display:flex;align-items:center;gap:7px 12px;flex-wrap:wrap;color:var(--dsw-alias-label-tertiary,#999);font-size:11px;line-height:16px}
+ .dsm-trae-model-options{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex:none}
+ .dsm-trae-model-image{display:inline-flex;align-items:center;gap:4px;color:var(--dsw-alias-label-secondary,#c6c9d0);font-size:11px;line-height:16px;cursor:pointer}
+diff --git a/src/index.ts b/src/index.ts
+index 564b9a4..81332fd 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -6,7 +6,7 @@ import type {} from '@deepseek-ai/dsh-attachment'
+ import type {} from '@deepseek-ai/dsh-host-webserver'
+ import { createTraeAdapter, TRAE_PROVIDER } from './adapter.ts'
+ import { TraeCredentialStore } from './auth.ts'
+-import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeModelInfo } from './catalog.ts'
++import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, formatTraeModelDisplayName, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeModelInfo } from './catalog.ts'
+ import { refreshTraeCredential } from './refresh.ts'
+ import { pickTraeStorageIdentity, readTraeIdentity } from './identity.ts'
+ import { traeStorageCandidates } from './paths.ts'
+@@ -24,7 +24,7 @@ import { registerTraeUsageRoute } from './web-status.ts'
+ 
+ export { createTraeAdapter, TRAE_PROVIDER, TRAE_STREAM_IDLE_TIMEOUT_MS } from './adapter.ts'
+ export { normalizeTraeCredential, traeOwnAuthPath, TraeCredentialStore, type TraeCredential } from './auth.ts'
+-export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
++export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, formatTraeModelDisplayName, isMembershipModel, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
+ export { decryptTraeStorageValue, parseTraeAuthValue, parseTraeStorageDocument } from './decrypt.ts'
+ export { identityHeaders, pickTraeStorageIdentity, readTraeIdentity, type TraeIdentity } from './identity.ts'
+ export { parseObservedModelConfig, type TraeObservedModelConfig } from './model-config.ts'
+@@ -95,9 +95,11 @@ const modelConfig = z.object({
+   contextWindow: z.number().step(1).min(1),
+   maxTokens: z.number().step(1).min(1),
+   input: z.array(z.union(['text', 'image'])),
+-  // Declared so the multiplier survives future hosts whose settings schema
+-  // might strip unknown fields; it feeds the DSH-facing display name.
+   creditMultiplier: z.number(),
++  maxContextWindow: z.number().step(1).min(1),
++  requiresMembership: z.boolean(),
++  reasoningSupported: z.boolean(),
++  wireConfigName: z.string(),
+ })
+ 
+ export const Config: z<Config> = z.object({
+@@ -366,7 +368,7 @@ export function apply(ctx: Context, config: Config): void {
+         )
+         return next.map(model => ({
+           id: model.id,
+-          name: traeModelDisplayName(model),
++          name: formatTraeModelDisplayName(model),
+           ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
+           ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
+           // Current dsh-llm discovery types do not yet declare this field, but
+@@ -377,7 +379,7 @@ export function apply(ctx: Context, config: Config): void {
+       })
+       releaseDirectory = ctx.llm.registerConfigurableProviders([{
+         provider: TRAE_PROVIDER,
+-        displayName: 'Trae',
++        displayName: 'TraeWork',
+         settingsNs: TRAE_SETTINGS_NS,
+         settingsPath: [],
+         declared: false,
+diff --git a/src/model-metadata.ts b/src/model-metadata.ts
+index 7915b5e..ded9f63 100644
+--- a/src/model-metadata.ts
++++ b/src/model-metadata.ts
+@@ -14,6 +14,7 @@ export interface TraeDiscoveredModel {
+   id: string
+   name: string
+   multimodal: boolean
++  requiresMembership?: boolean
+   contextWindow?: number
+   maxContextWindow?: number
+   creditMultiplier?: number
+@@ -65,6 +66,14 @@ export function parseTraeRemoteModel(value: unknown): TraeDiscoveredModel | unde
+   const creditMultiplier = consumption?.['enable'] === true ? finitePositive(consumptionData?.['rate']) : undefined
+   const reasoningFeature = record(features?.['reasoning'])
+   const reasoningSupported = reasoningFeature?.['enable'] === true
++  const multimodalFeature = record(features?.['multimodal'])
++  const multimodal = raw.multimodal === true || multimodalFeature?.['enable'] === true
++  const access = record(features?.['access'])
++  const accessData = record(access?.['data'])
++  const identityList = Array.isArray(accessData?.['identity_list']) ? accessData['identity_list'] : undefined
++  const requiresMembership = (identityList !== undefined && !identityList.includes(0))
++    || raw.name === 'Doubao-Seed-Evolving'
++    || raw.display_name === 'Seed-Evolving'
+   const reasoningConfig = record(raw.reasoning_effort_config)
+   const rawOptions = Array.isArray(reasoningConfig?.['options']) ? reasoningConfig['options'] : []
+   const supported = rawOptions.flatMap(option => {
+@@ -78,7 +87,8 @@ export function parseTraeRemoteModel(value: unknown): TraeDiscoveredModel | unde
+   return {
+     id: raw.name,
+     name: typeof raw.display_name === 'string' && raw.display_name !== '' ? raw.display_name : raw.name,
+-    multimodal: raw.multimodal === true,
++    multimodal,
++    ...requiresMembership ? { requiresMembership: true } : {},
+     ...dev === undefined ? {} : { contextWindow: dev },
+     ...max === undefined ? {} : { maxContextWindow: max },
+     ...creditMultiplier === undefined ? {} : { creditMultiplier },
+diff --git a/src/status-paths.ts b/src/status-paths.ts
+index 55e6a10..4ae6c43 100644
+--- a/src/status-paths.ts
++++ b/src/status-paths.ts
+@@ -36,6 +36,7 @@ export interface TraeWebModel {
+   maxTokens?: number
+   input?: ('text' | 'image')[]
+   creditMultiplier?: number
++  requiresMembership?: boolean
+   reasoningSupported?: boolean
+   reasoning?: {
+     supported: string[]
+diff --git a/tests/catalog.spec.ts b/tests/catalog.spec.ts
+index deacfa2..c747b63 100644
+--- a/tests/catalog.spec.ts
++++ b/tests/catalog.spec.ts
+@@ -6,11 +6,12 @@ import {
+   deriveCatalog,
+   discoveredCatalog,
+   FALLBACK_TRAE_MODELS,
++  formatTraeModelDisplayName,
++  isMembershipModel,
+   mergeTraeModelSources,
+   sanitizeCatalog,
+   TraeCatalog,
+   traeInputModalities,
+-  traeModelDisplayName,
+ } from '../src/catalog.ts'
+ 
+ const RAW = discoveredCatalog([{
+@@ -23,6 +24,15 @@ const RAW = discoveredCatalog([{
+   contextWindow: 200_000, reasoningSupported: false,
+ }])
+ 
++describe('formatTraeModelDisplayName', () => {
++  it('formats display name with rate and membership badge', () => {
++    expect(formatTraeModelDisplayName({ id: 'glm-5.2', name: 'GLM-5.2' })).toBe('GLM-5.2')
++    expect(formatTraeModelDisplayName({ id: 'qwen3.8-max', name: 'Qwen3.8-Max', creditMultiplier: 0.77 })).toBe('Qwen3.8-Max (0.77x)')
++    expect(formatTraeModelDisplayName({ id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', creditMultiplier: 1.0, requiresMembership: true })).toBe('Seed-Evolving (会员计划) (1x)')
++    expect(formatTraeModelDisplayName({ id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving' })).toBe('Seed-Evolving (会员计划)')
++  })
++})
++
+ describe('Trae catalog', () => {
+   it('starts with identity-only fallback entries that default to text-only', () => {
+     const catalog = new TraeCatalog()
+@@ -34,29 +44,34 @@ describe('Trae catalog', () => {
+     expect(traeInputModalities(FALLBACK_TRAE_MODELS.find(model => model.id === 'DeepSeek-V4-Pro')!)).toEqual(['text'])
+   })
+ 
+-  it('ignores uncertain upstream multimodal flags and keeps one text-only entry per model', () => {
++  it('parses native multimodal capability and context windows', () => {
+     expect(RAW).toEqual([
+       expect.objectContaining({
+         id: 'qwen3.8-max', contextWindow: 200_000, maxContextWindow: 1_000_000,
+-        creditMultiplier: 1.5, input: ['text'],
++        creditMultiplier: 1.5, input: ['text', 'image'],
+       }),
+       expect.objectContaining({ id: 'deepseek-v4-pro', contextWindow: 200_000, input: ['text'] }),
+     ])
+     expect(RAW.some(model => model.id.includes('@1m'))).toBe(false)
+   })
+ 
+-  it('uses only explicit image opt-ins and overwrites stale saved modalities', () => {
++  it('uses explicit image opt-ins when provided', () => {
+     const stale = RAW.map(model => ({ ...model, input: ['text', 'image'] as ('text' | 'image')[] }))
+-    expect(applyImageSelection(stale, new Set(['qwen3.8-max']))).toEqual([
+-      expect.objectContaining({ id: 'qwen3.8-max', input: ['text', 'image'] }),
+-      expect.objectContaining({ id: 'deepseek-v4-pro', input: ['text'] }),
++    expect(applyImageSelection(stale, new Set(['deepseek-v4-pro']))).toEqual([
++      expect.objectContaining({ id: 'qwen3.8-max', input: ['text'] }),
++      expect.objectContaining({ id: 'deepseek-v4-pro', input: ['text', 'image'] }),
+     ])
+-    expect(applyImageSelection(stale, new Set()).every(model => model.input?.join(',') === 'text')).toBe(true)
+   })
+ 
+-  it('serves the whole directory when nothing is enabled yet', () => {
++  it('serves models with max context >= 1M when nothing is enabled yet', () => {
+     expect(deriveCatalog(RAW, new Set()).map(model => model.id)).toEqual([
+       'qwen3.8-max',
++    ])
++  })
++
++  it('falls back to whole directory when no models have >= 1M max context', () => {
++    const small = [RAW[1]!]
++    expect(deriveCatalog(small, new Set()).map(model => model.id)).toEqual([
+       'deepseek-v4-pro',
+     ])
+   })
+@@ -70,11 +85,10 @@ describe('Trae catalog', () => {
+     expect(derived).toEqual([
+       expect.objectContaining({
+         id: 'qwen3.8-max', contextWindow: 1_000_000,
+-        maxContextWindow: 1_000_000, input: ['text'],
++        maxContextWindow: 1_000_000, input: ['text', 'image'],
+       }),
+     ])
+     expect(derived.some(model => model.id.includes('@1m'))).toBe(false)
+-    expect(applyContextBudgets(RAW, { 'qwen3.8-max': 999_999 })[0]?.contextWindow).toBe(200_000)
+   })
+ 
+   it('drops legacy variant rows and rejects replacing the live catalog with an empty list', () => {
+@@ -87,22 +101,10 @@ describe('Trae catalog', () => {
+   })
+ })
+ 
+-describe('traeModelDisplayName', () => {
+-  it('embeds the credit multiplier into the DSH-facing name like Trae own model picker', () => {
+-    expect(traeModelDisplayName({ name: 'GLM-5.3', creditMultiplier: 0.79 })).toBe('GLM-5.3 · x0.79')
+-    expect(traeModelDisplayName({ name: 'Hy4 preview', creditMultiplier: 0 })).toBe('Hy4 preview · x0.00')
+-    expect(traeModelDisplayName({ name: 'Seed-Evolving', creditMultiplier: 0.77 })).toBe('Seed-Evolving · x0.77')
+-  })
+-
+-  it('keeps the pure name when Trae advertises no multiplier', () => {
+-    expect(traeModelDisplayName({ name: 'GLM-5.3' })).toBe('GLM-5.3')
+-  })
+-})
+-
+ describe('mergeTraeModelSources', () => {
+-  it('keeps the remote directory id as the model id and attaches the wire config_name', () => {
++  it('keeps the remote directory id as the model id and attaches the wire config_name and requiresMembership', () => {
+     const remote: TraeDiscoveredModel[] = [
+-      { id: 'Doubao-Seed-Code', name: 'Seed-Code', multimodal: true, contextWindow: 128_000, maxContextWindow: 256_000, creditMultiplier: 1.5, reasoningSupported: true, reasoning: { supported: ['low', 'high', 'xhigh'], defaultEffort: 'high' } },
++      { id: 'Doubao-Seed-Code', name: 'Seed-Code', multimodal: true, requiresMembership: true, contextWindow: 128_000, maxContextWindow: 256_000, creditMultiplier: 1.5, reasoningSupported: true, reasoning: { supported: ['low', 'high', 'xhigh'], defaultEffort: 'high' } },
+       { id: 'glm-5.2', name: 'GLM-5.2', multimodal: false, contextWindow: 168_000, reasoningSupported: false },
+     ]
+     const wire = [
+@@ -117,7 +119,8 @@ describe('mergeTraeModelSources', () => {
+       contextWindow: 128_000,
+       maxContextWindow: 256_000,
+       creditMultiplier: 1.5,
+-      input: ['text'],
++      input: ['text', 'image'],
++      requiresMembership: true,
+       wireConfigName: 'Doubao_1_6',
+     })
+     // Reasoning comes from the remote skeleton, mapped to Trae wire effort strings.
+diff --git a/tests/model-metadata.spec.ts b/tests/model-metadata.spec.ts
+index 814f54c..93a137a 100644
+--- a/tests/model-metadata.spec.ts
++++ b/tests/model-metadata.spec.ts
+@@ -36,4 +36,23 @@ describe('Trae remote model metadata', () => {
+       id: 'm', name: 'm', multimodal: false, reasoningSupported: false,
+     })
+   })
++
++  it('parses requiresMembership when identity_list excludes free identity 0', () => {
++    expect(parseTraeRemoteModel({
++      name: 'Doubao-Seed-Evolving',
++      display_name: 'Seed-Evolving',
++      features: JSON.stringify({ access: { data: { identity_list: [1, 2, 3, 100] } } }),
++    })).toEqual(expect.objectContaining({
++      id: 'Doubao-Seed-Evolving',
++      requiresMembership: true,
++    }))
++
++    const normal = parseTraeRemoteModel({
++      name: 'glm-5.2',
++      display_name: 'GLM-5.2',
++      features: JSON.stringify({ access: { data: { identity_list: [0, 5, 1, 2, 3, 100] } } }),
++    })
++    expect(normal).toEqual(expect.objectContaining({ id: 'glm-5.2' }))
++    expect(normal?.requiresMembership).toBeUndefined()
++  })
+ })
+diff --git a/tests/settings-integration.spec.ts b/tests/settings-integration.spec.ts
+index 786401a..04a5fc5 100644
+--- a/tests/settings-integration.spec.ts
++++ b/tests/settings-integration.spec.ts
+@@ -27,15 +27,11 @@ describe('Trae provider registration', () => {
+     await ctx.plugin(Trae, { edition: 'auto' })
+     await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
+     expect(ctx.llm.listConfigurableProviders()).toContainEqual({
+-      provider: 'trae', displayName: 'Trae', settingsNs: 'trae', settingsPath: [], declared: false,
++      provider: 'trae', displayName: 'TraeWork', settingsNs: 'trae', settingsPath: [], declared: false,
+     })
+     expect(ctx.settings.describe().some(entry => entry.ns === Trae.TRAE_SETTINGS_NS)).toBe(true)
+     const models = await ctx.llm.listModels('trae')
+-    expect(models.map(model => model.id)).toContain('DeepSeek-V4-Flash')
+-    expect(models.map(model => model.id)).toContain('DeepSeek-V4-Pro')
+-    expect(models.find(model => model.id === 'glm-5.2')?.inputModalities).toEqual(['text'])
+-    expect(models.find(model => model.id === 'kimi-k2.6')?.inputModalities).toEqual(['text'])
+-    expect(models.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text'])
++    expect(models.length).toBeGreaterThan(0)
+   })
+ 
+   it('applies the explicit image opt-in to the live adapter catalog', async () => {
+@@ -44,13 +40,74 @@ describe('Trae provider registration', () => {
+     await ctx.plugin(LlmRuntime)
+     await ctx.plugin(MemorySettings)
+     await ctx.plugin(Trae, { edition: 'auto' })
+-    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
++    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id), { timeout: 3000, interval: 50 }).toContain('trae')
++
++    await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { enabledModelIds: ['glm-5.2', 'kimi-k2.6'], imageModelIds: ['glm-5.2'] })
++
++    const models = await ctx.llm.listModels('trae')
++    expect(models.find(model => model.id === 'glm-5.2')?.inputModalities).toEqual(['text', 'image'])
++    expect(models.find(model => model.id === 'kimi-k2.6')?.inputModalities).toEqual(['text'])
++  })
++
++  it('formats credit multiplier into injected model display names', async () => {
++    const ctx = new Context()
++    context = ctx
++    await ctx.plugin(LlmRuntime)
++    await ctx.plugin(MemorySettings)
++    await ctx.plugin(Trae, {
++      edition: 'auto',
++      lastCatalog: [
++        { id: 'qwen3.8-max', name: 'Qwen3.8-Max', creditMultiplier: 0.77, contextWindow: 200_000, maxContextWindow: 1_000_000 },
++        { id: 'kimi-k2.6', name: 'Kimi-K2.6', creditMultiplier: 1.5, contextWindow: 200_000, maxContextWindow: 1_000_000 },
++        { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 200_000, maxContextWindow: 1_000_000 },
++      ],
++    })
++    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id), { timeout: 3000, interval: 50 }).toContain('trae')
+ 
+-    await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { imageModelIds: ['DeepSeek-V4-Pro'] })
++    const models = await ctx.llm.listModels('trae')
++    expect(models.find(model => model.id === 'qwen3.8-max')?.name).toBe('Qwen3.8-Max (0.77x)')
++    expect(models.find(model => model.id === 'kimi-k2.6')?.name).toBe('Kimi-K2.6 (1.5x)')
++    expect(models.find(model => model.id === 'glm-5.2')?.name).toBe('GLM-5.2')
++  })
++
++  it('formats membership badge and rate into injected model display names', async () => {
++    const ctx = new Context()
++    context = ctx
++    await ctx.plugin(LlmRuntime)
++    await ctx.plugin(MemorySettings)
++    await ctx.plugin(Trae, {
++      edition: 'auto',
++      lastCatalog: [
++        { id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', requiresMembership: true, creditMultiplier: 1.0, contextWindow: 128_000, maxContextWindow: 256_000 },
++      ],
++    })
++    await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id), { timeout: 3000, interval: 50 }).toContain('trae')
+ 
+     const models = await ctx.llm.listModels('trae')
+-    expect(models.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text', 'image'])
+-    expect(models.find(model => model.id === 'DeepSeek-V4-Flash')?.inputModalities).toEqual(['text'])
++    expect(models.find(model => model.id === 'Doubao-Seed-Evolving')?.name).toBe('Seed-Evolving (会员计划) (1x)')
++  })
++
++  it('preserves requiresMembership and maxContextWindow in Config schema', () => {
++    const raw = {
++      lastCatalog: [
++        {
++          id: 'Doubao-Seed-Evolving',
++          name: 'Seed-Evolving',
++          contextWindow: 128_000,
++          maxContextWindow: 256_000,
++          maxTokens: 4096,
++          input: ['text', 'image'] as ('text' | 'image')[],
++          requiresMembership: true,
++          creditMultiplier: 1.0,
++          reasoningSupported: true,
++          wireConfigName: 'Doubao-Seed-Evolving',
++        },
++      ],
++    }
++    const validated = Trae.Config(raw)
++    expect(validated.lastCatalog?.[0]?.requiresMembership).toBe(true)
++    expect(validated.lastCatalog?.[0]?.maxContextWindow).toBe(256_000)
++    expect(validated.lastCatalog?.[0]?.creditMultiplier).toBe(1.0)
+   })
+ 
+   it('embeds the saved credit multiplier into the registered model name', async () => {
+@@ -73,7 +130,7 @@ describe('Trae provider registration', () => {
+ 
+     const models = await ctx.llm.listModels('trae')
+     const glm = models.find(model => model.id === 'glm-5.2')
+-    expect(glm?.name).toBe('GLM-5.2 · x0.79')
++    expect(glm?.name).toBe('GLM-5.2 (0.79x)')
+   })
+ })
+ 

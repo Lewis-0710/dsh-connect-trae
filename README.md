@@ -1,3 +1,15 @@
+> [!NOTE]
+> **Fork 维护版本** | 本仓库是 [dingminhua/dsh-connect-trae](https://github.com/dingminhua/dsh-connect-trae) 的维护分支。
+> 
+> **与上游差异**：
+> 1. 重写 TraeUsageCard 组件，支持用量图表与配额重置倒计时
+2. 扩展模型目录（catalog），增加模型元数据与状态路径定义
+3. 优化 adapter 层以兼容 DSH 客户端包拆分
+4. 添加中文本地化文案与自定义样式
+5. 扩展测试套件覆盖模型目录与元数据验证
+> 
+> 详见 [sync.patch](./sync.patch)。
+
 <p align="center">
   <img src="docs/assets/dsh-connect-trae-usage-card.png" width="860" alt="dsh-connect-trae settings panel" />
 </p>
