@@ -95,3 +95,76 @@ node scripts/probe-code-channel.mjs glm-5.3
 ```
 
 两个脚本都不打印 token，也不修改账号状态。
+
+---
+
+# 追加：create_agent_task 请求体已解开（2026-09-16）
+
+## 已解开的部分（本轮重大进展）
+
+`create_agent_task` 的**参数绑定层已完全通过**（HTTP 200 + SSE，不再报 missing required
+parameter）。可用的请求体结构：
+
+```jsonc
+{
+  "messages": [{ "role": "user", "content": [{ "type": "text", "text": "..." }] }],
+  "model": "<model>", "config_name": "<model>", "model_name": "<model>",
+  "function": "<function>",          // 见下方卡点
+  "stream": true,
+  "request_id": "<uuid>", "conversation_id": "<uuid>", "session_id": "<uuid>",
+  "user_id": "<account user id>", "device_id": "<device id>",
+  "agent_type": "chat", "mode_type": 0,
+  "ide_version": "<appVersion>",
+  "user_input": {                     // ideagent.UserInput
+    "id": "<uuid>",                   // 必填（binder 逐层点名 expr_path=user_input.id）
+    "text": "...", "content": "...", "type": "text", "role": "user"
+  }
+}
+```
+
+要点：binder 逐层点名（`expr_path=user_input` → `expr_path=user_input.id`），补上 `id`
+后绑定通过；Go 会忽略未知字段，因此可以一次性投喂多个候选字段名来加速定位。
+
+## 当前卡点（业务层）：`config item is empty for config opt`
+
+通过绑定层后，上游按请求参数查找一个**服务端配置项**并失败：
+
+```
+code:4001  message: "config item is empty for config opt:
+  {"AppId":"6eefa01c-…","Function":"chat","ConfigName":"deepseek-v4.1-flash",
+   "VersionCode":20260716,"PluginChannel":null,"IdeVersion":"3.3.100",
+   "ModeType":0,"AgentType":…}"
+```
+
+说明：**服务端正确解析出了 `ConfigName: deepseek-v4.1-flash`**，但找不到与之匹配的
+config。遍历 `function` 的 7 个候选值（`inline_chat` / `chat` / `agent` / `solo_agent` /
+`solo_work_remote` / `builder` / `code`）结果一致，因此卡点不在 function 参数。
+
+对照证据（本机 Trae 安装包的 `libai_agent.dylib` 字符串）：
+
+- `INSERT INTO model_config_cache (user_id, env, function, config_data, updated_at)`
+  —— 客户端本地有**模型配置缓存表**；
+- `[Hub Bridge] get_models: user_id is empty, skip request` —— IDE 的模型列表经
+  **本地 Hub Bridge（IPC）** 获取；
+- `upsert-config --check-and-recovery-env --storage-path --config-name` —— 存在
+  **配置注册/上报**的动作。
+
+**推断**：`create_agent_task` 依赖的是「客户端注册到服务端的 config」，而 IDE 的模型
+菜单走的是另一条路（本地缓存 + Hub Bridge）。这解释了为什么公开生态里没有该通道的
+成功实现——门槛不止是协议格式，还有**配置注册链路**。
+
+## 下一步的验证点
+
+1. 找到 config 注册动作（`upsert-config` 相关的本地 IPC / 远程端点），确认能否为
+   `deepseek-v4.1-flash` 建立服务端 config；
+2. 或改用 `/api/ide/v1/agents/runs`（实测存在且鉴权通过，返回 `code:5003` agent 配额类
+   错误）探索另一条 agent 路径；
+3. 若两者都被「客户端注册链路」挡住，则结论是：**该模型只能由 Trae 客户端自身使用**，
+   插件侧应维持 SOLO 通道（14 个模型）。
+
+## 复现
+
+```bash
+node scripts/probe-agent-task-body.mjs deepseek-v4.1-flash 14   # 绑定层解算（零额度）
+node scripts/probe-code-fields.mjs glm-5.3 12                   # 更早的必填字段还原
+```
