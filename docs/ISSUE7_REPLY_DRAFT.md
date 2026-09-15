@@ -1,31 +1,60 @@
-# issue #7 回复草稿
+# issue #7 回复（2.0.2 发布后贴）
 
-> 用途：回复 https://github.com/dingminhua/dsh-connect-trae/issues/7（zyk-mjzs：「traecode 有 glm 5.3 但这边只有 5.2」）。
-> 取证细节见 `docs/CN_MODEL_DIRECTORY_EVIDENCE.md`。可直接复制横线以内的内容。
+> 用途：回复 https://github.com/dingminhua/dsh-connect-trae/issues/7
+> （zyk-mjzs：「traecode 有 glm 5.3 但这边只有 5.2」；BrowserZz 追加：「traecode 有
+> GLM-5.3-Flash、DeepSeek-V4.1-Flash 模型。什么时候支持？」）
+>
+> **先发布 2.0.2 到 npm，确认 `npm view dsh-connect-trae version` 显示 2.0.2
+> 之后再贴。** 可直接复制横线以内的内容。
 
 ---
 
-你的观察是对的，Trae 的模型目录里确实有 **GLM-5.3**——但这里的问题不在插件漏读，而是**上游「模型目录」与「调用通道」不一致**，我做了完整取证：
+感谢 @zyk-mjzs @BrowserZz 两位的反馈，这里一次说清结论。
 
-## 结论先说
+## 结论
 
-- **目录里有**：`glm-5.3` 在 Trae 的模型目录（remote `/models`）里是**完整的预设模型**，`is_preset`、定价（0.78，会员折扣 50% → 0.39）、reasoning 支持、上下文窗口（200K / Max 1M）等标志**与 `glm-5.2` 完全同级**，还带 `is_new`（新上线）标记。
-- **但调不动**：插件使用的 SOLO 通道（`/api/agent/v3/llm_utils_chat`）**无法调用它**。我用插件自身的请求构造做了受控验证：
-  - 对照：`glm-5.2` → HTTP 200 + 正常出字（`OK`）
-  - `glm-5.3` → HTTP 200，但 SSE 内容为 `error {code:4001, message:"the param is invalid"}`
-  - 换 `solo_agent` / `solo_agent_lite` / `inline_chat` 三种 function 再试 → **全部 4001**
-- **`get_detail_param` 的 config 集合里也没有它**（`solo_work_lite` 41 条 / `solo_agent` 52 条 / `solo_agent_lite` 35 条，glm 系列只有 5.2 / 5.1 / 5 / 4.7）；定向查询对照：查 `glm-5.2` 能返回、查 `glm-5.3` 返回 0 条。
+**TraeCode 通道的这 4 个模型，本插件目前不支持——需要等官方开放到 SOLO 通道。**
 
-## 为什么 Trae 里能用、插件里不能
+| 模型 | 状态 |
+| --- | --- |
+| `glm-5.3-flash` | 暂不支持（TraeCode 通道） |
+| `deepseek-v4.1-flash` | 暂不支持（TraeCode 通道） |
+| `kimi-k2.8-preview` | 暂不支持（TraeCode 通道） |
+| `qwen3.8-flash` | 暂不支持（TraeCode 通道） |
 
-Trae IDE 的对话走的是 **`create_agent_task`（agent task 协议）**，而插件为了保住 DSH 的结构化工具调用，走的是 **SOLO 轻量通道**（`llm_utils_chat`）。这是两套不同的调用面，`glm-5.3` 只在前者的 config 集合里。
+它们目前只在 **Trae IDE 客户端**内可用。插件走的是 Trae 的 **SOLO 通道**，这条通道上没有它们，所以插件侧拿不到——不是漏读目录，而是没有可调用的通道。
 
-所以插件目前把「目录里有、但当前通道调不动」的模型**从可勾选列表里剔除**，是为了避免更糟的体验：能选中、但每次对话都失败。这个判定在之前的版本里就有记录（见 CHANGELOG 1.1.0，当时 `glm-5.3` 与 `Doubao-Seed-Code` 属同类），本次取证确认**至今仍然成立**。
+**需要等官方把这批模型开放到 SOLO 通道后，插件才能支持。**
 
-## 可以怎么改进
+## 关于 GLM-5.3：这个已经支持了
 
-如果你希望「至少能看到它、并知道为什么不能用」，我可以做一个**低风险的改进**：把这类模型在卡片里列出来但标记为不可勾选（附一句说明：Trae 目录已提供，当前通道暂不支持）。这样就不会再让人以为是插件漏了模型。
+@zyk-mjzs 提到的 **GLM-5.3 其实已经支持**（2.0.2 起）。请更新后再看一下：
 
-要彻底支持它则需要另做 **agent-task 通道**——那是完整另一套协议（body 结构、SSE 事件集、工具调用格式都不同），属于大工程，需要单独立项评估。
+```bash
+npm i -g dsh-connect-trae@2.0.2
+```
 
-请告诉我你更希望哪种：**（A）** 先做「可见但标注不可用」，还是 **（B）** 维持现状？
+> 顺带区分一个容易混的点：**`GLM-5.3` 支持**（走 SOLO），**`glm-5.3-flash` 不支持**——名字像，但是两个不同的模型。
+
+## 为什么拿不到
+
+我逐条实测过所有可能的路径，都不通，且原因各不相同：
+
+- **`create_agent_task`（TraeCode 的对话协议）**：绑定层已解开（HTTP 200 + SSE），但业务层卡在 `4001 config item is empty`——它需要 IDE 客户端本地注册的 config，插件无法伪造。
+- **`/api/ide/v1/agents/runs`**：端点存在、鉴权通过，返回账号级 `5003 agent running quota limit is exceeded`。
+- **本地 Hub Bridge / Aha IPC**：存在，但是私有协议，且要求 IDE 同机常驻。
+- **TraeCLI（`trae-cli`）**：公网版需要交互式 SSO 登录；而且它**本身就是 agent**，模型出口是私有后端（`/trae-cli/api/v1/llm/proxy` + 私有头），不是可复用的 LLM 代理。用它就等于让 TraeCLI 干活、DSH 退化成壳，与插件定位冲突。
+
+一句话：这属于**上游授权边界**，不是插件能绕过的技术问题。取证细节我留在了仓库里（`docs/DS41_CALLABILITY.md`、`docs/CODEC_CHANNEL_FEASIBILITY.md`、`docs/TRAECLI_FEASIBILITY.md`）。
+
+## 现在想用这 4 个模型怎么办
+
+**直接用 Trae IDE 本体。**
+
+## 插件会怎么处理
+
+这 4 个模型**不会出现在插件列表里**——因为「能选中但每次对话都失败」比「不显示」更糟。README 的「模型覆盖范围」一节也写清楚了同样的事。
+
+如果哪天官方把它们开放到 SOLO 通道，插件会自动出现在列表里（目录是实时拉取的），不需要改代码。
+
+再次感谢反馈 🙏
