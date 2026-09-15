@@ -7,8 +7,38 @@ import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import { traeInputModalities, traeModelDisplayName, type TraeCatalog, type TraeModelInfo } from './catalog.ts'
 import type { TraeShim } from './shim.ts'
+import type { TraeRegion } from './region.ts'
 
+/** Provider route this bundle owns for the domestic (CN) gateway. */
 export const TRAE_PROVIDER = 'trae'
+
+/**
+ * Provider route this bundle owns for the international (trae.ai) gateway.
+ * Named `-global` to match the plugin family's convention (`workbuddy-global`);
+ * the internal region bucket stays `ai`, which is the gateway/protocol name.
+ */
+export const TRAE_AI_PROVIDER = 'trae-global'
+
+/** The provider id each region registers as. */
+export const TRAE_PROVIDERS: Readonly<Record<TraeRegion, string>> = {
+  cn: TRAE_PROVIDER,
+  ai: TRAE_AI_PROVIDER,
+}
+
+/** Human-readable provider names, shown in the DSH model picker. */
+export const TRAE_PROVIDER_DISPLAY_NAMES: Readonly<Record<TraeRegion, string>> = {
+  cn: 'Trae',
+  ai: 'Trae Global',
+}
+
+/** Region a provider route id belongs to. */
+export function regionOfTraeProvider(provider: string): TraeRegion | undefined {
+  for (const [region, id] of Object.entries(TRAE_PROVIDERS) as [TraeRegion, string][]) {
+    if (id === provider) return region
+  }
+  return undefined
+}
+
 export const TRAE_STREAM_IDLE_TIMEOUT_MS = 300_000
 
 const INERT_AUTH: { credentials: CredentialStore; authContext: AuthContext } = {
@@ -30,12 +60,12 @@ const REQUEST_IMAGE_BUDGETS = {
   requestImageMaxBytes: 1_048_576,
 } as const
 
-function toPiModel(info: TraeModelInfo, baseUrl: string): Model<Api> {
+function toPiModel(info: TraeModelInfo, baseUrl: string, providerId: string): Model<Api> {
   return {
     id: info.id,
     name: traeModelDisplayName(info),
     api: 'openai-completions',
-    provider: TRAE_PROVIDER,
+    provider: providerId,
     baseUrl,
     input: traeInputModalities(info),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -60,6 +90,10 @@ function toPiModel(info: TraeModelInfo, baseUrl: string): Model<Api> {
 export interface TraeAdapterOptions {
   shim: TraeShim
   catalog: TraeCatalog
+  /** Provider route id this instance serves; defaults to the CN route. */
+  provider?: string
+  /** pi-ai provider name and profile display name; defaults to the CN name. */
+  displayName?: string
   resolveAttachments?: () => AttachmentStore | undefined
 }
 
@@ -69,12 +103,14 @@ export interface TraeAdapter {
 }
 
 export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
+  const providerId = options.provider ?? TRAE_PROVIDER
+  const providerName = options.displayName ?? 'Trae'
   const buildModels = (): Model<Api>[] => options.catalog.current()
-    .map(info => toPiModel(info, `${options.shim.baseUrl()}/v1`))
+    .map(info => toPiModel(info, `${options.shim.baseUrl()}/v1`, providerId))
 
   const base = createProvider({
-    id: TRAE_PROVIDER,
-    name: 'Trae',
+    id: providerId,
+    name: providerName,
     auth: {
       apiKey: {
         name: 'Trae loopback secret',
@@ -91,8 +127,8 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
   })
   const provider: Provider = { ...base, getModels: () => buildModels() }
   const profile: ResolvedPiAiProviderProfile = {
-    provider: TRAE_PROVIDER,
-    displayName: 'Trae',
+    provider: providerId,
+    displayName: providerName,
     streamIdleTimeoutMs: TRAE_STREAM_IDLE_TIMEOUT_MS,
     retryPolicy: resolveRetryPolicy(undefined, 'dsh-connect-trae retryPolicy'),
     configuredMaxTokens: new Map(),
@@ -108,7 +144,9 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
     ...REQUEST_IMAGE_BUDGETS,
     piProvider: provider,
   }
-  let profiles = new Map<string, ResolvedPiAiProviderProfile>([[TRAE_PROVIDER, profile]])
+  // Replacing (not mutating) the map is what `invalidate` uses to force the
+  // adapter's next profiles read to rebuild its snapshot.
+  let profiles = new Map<string, ResolvedPiAiProviderProfile>([[providerId, profile]])
   const adapter = new PiAiAdapter({
     profiles: () => profiles,
     auth: INERT_AUTH,
@@ -119,7 +157,7 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
   return {
     adapter,
     invalidate() {
-      profiles = new Map([[TRAE_PROVIDER, profile]])
+      profiles = new Map([[providerId, profile]])
     },
   }
 }

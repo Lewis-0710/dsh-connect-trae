@@ -41,7 +41,7 @@ async function isolatedPlugin(ctx: Context, config: Partial<Trae.Config> = {}): 
 }
 
 describe('Trae provider registration', () => {
-  it('registers provider, settings, and fallback models after shim startup', async () => {
+  it('registers both regional providers, settings, and fallback models after shim startup', async () => {
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
@@ -49,8 +49,12 @@ describe('Trae provider registration', () => {
     const restore = await isolatedPlugin(ctx)
     try {
       await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
+      await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae-global')
       expect(ctx.llm.listConfigurableProviders()).toContainEqual({
         provider: 'trae', displayName: 'Trae', settingsNs: 'trae', settingsPath: [], declared: false,
+      })
+      expect(ctx.llm.listConfigurableProviders()).toContainEqual({
+        provider: 'trae-global', displayName: 'Trae Global', settingsNs: 'trae', settingsPath: [], declared: false,
       })
       expect(ctx.settings.describe().some(entry => entry.ns === Trae.TRAE_SETTINGS_NS)).toBe(true)
       const models = await ctx.llm.listModels('trae')
@@ -59,6 +63,10 @@ describe('Trae provider registration', () => {
       expect(models.find(model => model.id === 'glm-5.2')?.inputModalities).toEqual(['text'])
       expect(models.find(model => model.id === 'kimi-k2.6')?.inputModalities).toEqual(['text'])
       expect(models.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text'])
+      // The international provider serves its own fallback roster, not the CN one.
+      const globalIds = (await ctx.llm.listModels('trae-global')).map(model => model.id)
+      expect(globalIds.length).toBeGreaterThan(0)
+      expect(globalIds).not.toContain('DeepSeek-V4-Pro')
     } finally { await restore() }
   })
 
@@ -161,18 +169,18 @@ describe('per-region model slots', () => {
     } finally { await restore() }
   })
 
-  it('saving an ai slot never leaks its roster into the CN runtime', async () => {
+  it('an ai slot feeds the international provider only, never the CN runtime', async () => {
     const ctx = new Context()
     context = ctx
     await ctx.plugin(LlmRuntime)
     await ctx.plugin(MemorySettings)
     const restore = await isolatedPlugin(ctx)
     try {
-      await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
+      await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae-global')
 
-      // An international directory saved into the ai slot: with no signed-in
-      // international account the tracked region stays cn, so the runtime catalog
-      // must keep serving the CN roster and never the ai one.
+      // An international directory saved into the ai slot: it is the
+      // international provider's own state, so that provider serves it — while
+      // the CN provider keeps serving the CN roster and never the ai one.
       await ctx.settings.update(Trae.TRAE_SETTINGS_NS, {
         regions: {
           ai: {
@@ -185,12 +193,62 @@ describe('per-region model slots', () => {
         },
       })
 
-      const ids = (await ctx.llm.listModels('trae')).map(model => model.id)
-      expect(ids).not.toContain('gemini-3.1-pro')
-      expect(ids).not.toContain('gpt-5.4')
+      const globalIds = (await ctx.llm.listModels('trae-global')).map(model => model.id)
+      expect(globalIds).toContain('gpt-5.4')
+      // The CN provider is untouched by the international slot's save.
+      const cnIds = (await ctx.llm.listModels('trae')).map(model => model.id)
+      expect(cnIds).not.toContain('gemini-3.1-pro')
+      expect(cnIds).not.toContain('gpt-5.4')
       for (const fallback of ['auto', 'DeepSeek-V4-Flash', 'glm-5.2']) {
-        expect(ids).toContain(fallback)
+        expect(cnIds).toContain(fallback)
       }
+    } finally { await restore() }
+  })
+
+  it('a CN-slot save leaves the international provider untouched', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    const restore = await isolatedPlugin(ctx)
+    try {
+      await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae-global')
+
+      // The CN tab's save writes regions.cn (the flat fields stand in for a
+      // pre-split CN config); that must never reach the international provider.
+      await ctx.settings.update(Trae.TRAE_SETTINGS_NS, {
+        regions: {
+          cn: {
+            lastCatalog: [{ id: 'kimi-k2.6', name: 'Kimi-K2.6', input: ['text'] }],
+            enabledModelIds: ['kimi-k2.6'],
+          },
+        },
+      })
+
+      const cnIds = (await ctx.llm.listModels('trae')).map(model => model.id)
+      expect(cnIds).toContain('kimi-k2.6')
+      const globalIds = (await ctx.llm.listModels('trae-global')).map(model => model.id)
+      expect(globalIds).not.toContain('kimi-k2.6')
+    } finally { await restore() }
+  })
+
+  it('applies the image opt-in per region without cross-contamination', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    const restore = await isolatedPlugin(ctx)
+    try {
+      await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae-global')
+
+      // The legacy flat image opt-in is CN-only state.
+      await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { imageModelIds: ['DeepSeek-V4-Pro'] })
+
+      const cnModels = await ctx.llm.listModels('trae')
+      expect(cnModels.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities).toEqual(['text', 'image'])
+      // The international provider's own directory carries no such opt-in.
+      const globalModels = await ctx.llm.listModels('trae-global')
+      expect(globalModels.find(model => model.id === 'DeepSeek-V4-Pro')?.inputModalities ?? []).not.toContain('image')
     } finally { await restore() }
   })
 })

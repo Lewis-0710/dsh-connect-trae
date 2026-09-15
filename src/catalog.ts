@@ -230,7 +230,16 @@ export function deriveCatalog(
 }
 
 export class TraeCatalog {
-  private models: readonly TraeModelInfo[] = FALLBACK_TRAE_MODELS
+  private models: readonly TraeModelInfo[]
+
+  /**
+   * @param region Seeds the static fallback for this region; each region's
+   * provider must never serve the other region's roster before its first live
+   * refresh lands.
+   */
+  constructor(region: TraeRegion = 'cn') {
+    this.models = fallbackModelsFor(region)
+  }
 
   current(): readonly TraeModelInfo[] {
     return this.models

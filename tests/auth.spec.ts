@@ -304,3 +304,125 @@ describe('TraeCredentialStore with a CLI-only sign-in', () => {
     expect(failures[0]?.reason).toBe('invalid')
   })
 })
+
+describe('TraeCredentialStore region scoping', () => {
+  /** One CN install and one international install, each with its own file. */
+  async function mixedInstalls(dir: string): Promise<{ cn: string, ai: string }> {
+    const cnFile = join(dir, 'cn-storage.json')
+    const aiFile = join(dir, 'ai-storage.json')
+    await writeFile(cnFile, storage('cn-token', Date.now() + 3_600_000, Date.now() + 86_400_000, 'cn-user'))
+    await writeFile(aiFile, intlStorage('ai-token', Date.now() + 3_600_000, 'intl-user'))
+    return { cn: cnFile, ai: aiFile }
+  }
+
+  /** A store pinned to one region, with both installs offered as candidates. */
+  function regionStore(dir: string, region: 'cn' | 'ai', files: { cn: string, ai: string }): TraeCredentialStore {
+    const store = new TraeCredentialStore({
+      region,
+      ownPath: join(dir, `own-${region}.json`),
+      legacyOwnPath: join(dir, 'legacy-own.json'),
+      refresh: async () => { throw new Error('unused') },
+    })
+    store.candidates = () => [
+      { edition: 'cn', path: files.cn, source: 'desktop' },
+      { edition: 'solo-sg', path: files.ai, source: 'desktop' },
+    ]
+    return store
+  }
+
+  it('a region-scoped store only sees its own region accounts', async () => {
+    const dir = await temp()
+    const files = await mixedInstalls(dir)
+    const cn = regionStore(dir, 'cn', files)
+    const ai = regionStore(dir, 'ai', files)
+
+    expect((await cn.accounts()).map(account => account.region)).toEqual(['cn'])
+    expect((await ai.accounts()).map(account => account.region)).toEqual(['ai'])
+    expect((await cn.current())?.accessToken).toBe('cn-token')
+    expect((await ai.current())?.accessToken).toBe('ai-token')
+  })
+
+  it('does not resolve the other region\'s explicitly selected account', async () => {
+    const dir = await temp()
+    const files = await mixedInstalls(dir)
+    const cnAccountId = (await regionStore(dir, 'cn', files).accounts())[0]?.id
+    const ai = regionStore(dir, 'ai', files)
+    ai.selectAccount(cnAccountId)
+    // A CN account id in the international store: not found → undefined, never
+    // a silent fallback to the international account.
+    await expect(ai.current()).resolves.toBeUndefined()
+  })
+
+  it('the legacy single own copy serves only the region it belongs to', async () => {
+    const dir = await temp()
+    const legacy = join(dir, 'legacy-own.json')
+    // A legacy refreshed copy carrying a CN credential.
+    await writeFile(legacy, JSON.stringify({ version: 1, credential: {
+      accessToken: 'legacy-cn', userId: 'cn-user', accountName: 'cn-user',
+      host: 'https://api.trae.cn', expiresAtMs: Date.now() + 86_400_000,
+      edition: 'cn', source: 'desktop',
+    } }))
+    const cn = new TraeCredentialStore({
+      region: 'cn',
+      ownPath: join(dir, 'own-cn.json'),
+      legacyOwnPath: legacy,
+      refresh: async () => { throw new Error('unused') },
+    })
+    const ai = new TraeCredentialStore({
+      region: 'ai',
+      ownPath: join(dir, 'own-ai.json'),
+      legacyOwnPath: legacy,
+      refresh: async () => { throw new Error('unused') },
+    })
+    cn.candidates = () => []
+    ai.candidates = () => []
+
+    expect((await cn.current())?.accessToken).toBe('legacy-cn')
+    // The international region never inherits the CN credential.
+    await expect(ai.current()).resolves.toBeUndefined()
+  })
+
+  it('a region refresh persists into the region own file, leaving the legacy copy alone', async () => {
+    const dir = await temp()
+    const legacy = join(dir, 'legacy-own.json')
+    const regionFile = join(dir, 'own-ai.json')
+    const file = join(dir, 'ai-storage.json')
+    await writeFile(file, intlStorage('ai-old', Date.now() - 1000, 'intl-user'))
+    await writeFile(legacy, JSON.stringify({ version: 1, credential: {
+      accessToken: 'legacy-cn', userId: 'cn-user', accountName: 'cn-user',
+      host: 'https://api.trae.cn', expiresAtMs: Date.now() + 86_400_000,
+      edition: 'cn', source: 'desktop',
+    } }))
+    const store = new TraeCredentialStore({
+      region: 'ai',
+      ownPath: regionFile,
+      legacyOwnPath: legacy,
+      refresh: async () => ({ accessToken: 'ai-refreshed', expiresAtMs: Date.now() + 3_600_000 }),
+    })
+    store.candidates = () => [{ edition: 'solo-sg', path: file, source: 'desktop' }]
+
+    await expect(store.resolve()).resolves.toMatchObject({ accessToken: 'ai-refreshed', source: 'dsh' })
+    const saved = JSON.parse(await readFile(regionFile, 'utf8')) as { credential: { accessToken: string } }
+    expect(saved.credential.accessToken).toBe('ai-refreshed')
+    // The legacy copy carried the other region and is untouched by this write.
+    const untouched = JSON.parse(await readFile(legacy, 'utf8')) as { credential: { accessToken: string } }
+    expect(untouched.credential.accessToken).toBe('legacy-cn')
+  })
+
+  it('logout removes every plugin-owned copy the store could read', async () => {
+    const dir = await temp()
+    const regionFile = join(dir, 'own-cn.json')
+    const legacy = join(dir, 'legacy-own.json')
+    await writeFile(regionFile, '{}')
+    await writeFile(legacy, '{}')
+    const store = new TraeCredentialStore({
+      region: 'cn',
+      ownPath: regionFile,
+      legacyOwnPath: legacy,
+      refresh: async () => { throw new Error('unused') },
+    })
+    await store.logout()
+    await expect(readFile(regionFile, 'utf8')).rejects.toThrow()
+    await expect(readFile(legacy, 'utf8')).rejects.toThrow()
+  })
+})

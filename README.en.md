@@ -23,32 +23,36 @@
   <a href="https://dshfind.com/plugins/dingminhua/dsh-connect-trae"><img src="https://dshfind.com/api/badge/dingminhua/dsh-connect-trae" alt="dshfind plugin"></a>
 </p>
 
-A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle plugin that connects locally signed-in Trae models (**both CN and international installs**) to the DSH model picker. Trae generates structured tool calls while DSH executes its own local tools, with a read-only usage overview (Work/general credits on CN, subscription status on international) and model-management panel.
+A [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) bundle plugin that connects locally signed-in Trae models (**both CN and international installs**) to the DSH model picker. Trae generates structured tool calls while DSH executes its own local tools, with a read-only usage overview (Work/general credits on CN, subscription status on international) and model-management panel. **The CN and international sides are two parallel providers (`trae` / `trae-global`) that can be used at the same time**; the settings card separates them with tabs for convenient management.
 
 ## Features
 
-- **Trae model provider** — registers locally signed-in Trae models as the `trae` provider (e.g. `DeepSeek-V4-Flash`, `DeepSeek-V4-Pro`).
+- **Dual parallel providers** — the CN side registers as the `trae` provider (e.g. `DeepSeek-V4-Flash`, `DeepSeek-V4-Pro`), the international side as `trae-global` (the Gemini/GPT/MiniMax roster), and **both rosters appear in the DSH model picker simultaneously**: different sessions can each pick a side without interfering.
+- **Tabbed settings card** — the card's top carries a "Domestic / Global" tab bar; each tab holds its own account picker, usage overview, and model management. Account, directory, selection, and unsaved drafts are fully isolated per tab — switching accounts or refreshing models on one tab never touches the other side's runtime catalog or sessions.
 - **Multiplier in the model name** — model names show the credit multiplier in Trae's own menu format (e.g. `GLM-5.2 · x0.79`), updated with each directory refresh.
 - **DSH local tool loop** — gets pending structured `tool_calls` from Trae `llm_utils_chat`, lets DSH execute its own local tools, then returns tool results to the model.
-- **Dual-region support (CN / international)** — detects local sign-ins across Trae CN, TRAE SOLO CN, Trae, and TRAE SOLO installs; **zero config, zero toggles**: selecting an international account switches to the international gateway (`coresg-normal.trae.ai` with the Gemini/GPT/MiniMax roster) and back. The region is derived from the credential's own `userRegion` claim.
-- **Region-isolated directories and selections** — CN and international each keep their own model directory, enabled picks, image opt-ins, and context budgets; switching accounts never disturbs the other region.
+- **Dual-region detection (CN / international)** — detects local sign-ins across Trae CN, TRAE SOLO CN, Trae, and TRAE SOLO installs. The region is derived from the credential's own `userRegion` claim (host suffix and edition label as fallbacks), with no manual switch.
+- **Region-isolated directories and selections** — CN and international each keep their own model directory, enabled picks, image opt-ins, and context budgets, and each provider reads only its own slot.
 - **Account switching** — refreshes the token list and lets users select an account without storing tokens in DSH settings.
 - **Read-only usage and model management** — Work/general credits on CN accounts, subscription/trial status on international ones; enable Trae models freely. Read-only queries consume nothing.
-- **Secure loopback shim** — random port + in-process random secret; the real Trae token is never handed to pi-ai.
+- **Secure loopback shim** — one random port + in-process random secret per region; the real Trae token is never handed to pi-ai.
 
 ## How it works
 
 ```text
-DSH PiAiAdapter
-  -> secure loopback shim
+DSH PiAiAdapter (one stack per provider)
+  -> secure loopback shim (one random port + in-process random secret per region)
   -> TraeSoloBridge
-  -> https://trae-api-cn.mchost.guru/api/agent/v3/llm_utils_chat
+  -> CN: https://trae-api-cn.mchost.guru/api/agent/v3/llm_utils_chat
+  -> Global: https://coresg-normal.trae.ai/api/agent/v3/llm_utils_chat
   -> Trae SSE / pending function_call
   -> OpenAI SSE tool_calls
   -> DSH executes local tools and returns their results
 ```
 
-Usage overview hits the read-only `https://api.trae.cn/trae/api/v2/pay/*` and `/trae/api/v2/ug/*` endpoints.
+The CN and international sides each own a complete runtime stack — credential store, model catalog, wire map, upstream clients, loopback shim, adapter — with visibility filtered by the credential's own region claim, so **both regions' accounts can be signed in and used by different sessions at the same time**.
+
+Usage overview hits the read-only `https://api.trae.cn/trae/api/v2/pay/*` and `/trae/api/v2/ug/*` endpoints (international accounts read their own gateway's subscription status). Refreshed tokens are kept per region in `$DSH_HOME/.trae-auth.cn.json` and `$DSH_HOME/.trae-auth.ai.json` (two simultaneously signed-in accounts never overwrite each other; the legacy single file `.trae-auth.json` is still read as a migration source).
 
 > See `docs/IMPLEMENTATION_PLAN.md`, `docs/SOLO_ROUTE_DECISION.md`, `docs/USAGE_API_RESEARCH.md`.
 

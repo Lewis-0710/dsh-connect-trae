@@ -12,6 +12,32 @@ export const TRAE_MODELS_REFRESH_PATH = '/plugins/dsh-connect-trae/models/refres
 /** Plugin-owned local account rescan endpoint. */
 export const TRAE_ACCOUNTS_REFRESH_PATH = '/plugins/dsh-connect-trae/accounts/refresh'
 
+/** Query parameter naming the region a card request addresses. */
+export const TRAE_REGION_PARAM = 'region'
+
+/** Every region, in card tab order. */
+export const TRAE_REGIONS: readonly TraeRegion[] = ['cn', 'ai']
+
+/**
+ * Address one region's status route. The two regions are separate provider
+ * stacks; every card request carries the region whose tab the user is on.
+ */
+export function withTraeRegion(path: string, region: TraeRegion): string {
+  return `${path}?${TRAE_REGION_PARAM}=${region}`
+}
+
+/**
+ * Read the region parameter off a status-route URL. Absent means the domestic
+ * tab (`cn`); a present-but-unknown value returns undefined so the route can
+ * answer 400 instead of guessing.
+ */
+export function regionOfTraeStatusUrl(url: string): TraeRegion | undefined {
+  const at = url.indexOf('?')
+  const value = at === -1 ? null : new URLSearchParams(url.slice(at + 1)).get(TRAE_REGION_PARAM)
+  if (value === null || value === '') return 'cn'
+  return (TRAE_REGIONS as readonly string[]).includes(value) ? value as TraeRegion : undefined
+}
+
 /** One credit pack and its remaining credit. */
 export interface TraeWebCreditAccount {
   displayDesc: string

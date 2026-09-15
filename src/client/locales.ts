@@ -6,9 +6,12 @@
 
 export const en = {
   'row.title': 'Trae credits & models (dsh-connect-trae)',
-  'row.desc': 'Use the models in the Trae desktop app directly in DSH, and see your remaining credits at a glance.',
+  'row.desc': 'Use Trae models in DSH and see your remaining credits; the domestic and international sides are two independent providers, each with its own account — use both at the same time.',
   'row.expand': 'Expand',
   'row.collapse': 'Collapse',
+  'row.tabCn': 'Domestic',
+  'row.tabAi': 'Global',
+  'row.tabHint': 'Each tab is a separate provider (trae / trae-global) with its own account, usage, and models. Both sides are live at once: different sessions can pick from either side, and changes on one tab never touch the other.',
   'row.signedOut': 'Not signed in',
   'row.signedOutHint': 'Sign in once in the Trae desktop app; this plugin follows that sign-in automatically.',
   'row.searchedTitle': 'Paths checked',
@@ -71,9 +74,12 @@ export type TraeSettingsKey = keyof typeof en
 
 export const zh: Record<TraeSettingsKey, string> = {
   'row.title': '接入使用Trae积分与模型（dsh-connect-trae）',
-  'row.desc': '在 DSH 中直接使用 Trae 桌面 App 包含的模型，并随时查看剩余积分。',
+  'row.desc': '在 DSH 中使用 Trae 模型并随时查看剩余积分；国内版与国际版是两个独立供应商，各有自己的账号，可同时使用。',
   'row.expand': '展开',
   'row.collapse': '收起',
+  'row.tabCn': '国内版',
+  'row.tabAi': '国际版',
+  'row.tabHint': '每个 tab 是一个独立供应商（trae / trae-global），各有自己的账号、用量与模型。两边同时生效：不同会话可各选一边，一侧的改动不影响另一侧。',
   'row.signedOut': '未登录',
   'row.signedOutHint': '在 Trae 桌面 App 里登录一次即可，插件会自动跟随当前登录的账号。',
   'row.searchedTitle': '已检查的路径',

@@ -10,8 +10,16 @@ import { createElement as h } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { nextRegionSlots, TRAE_ACCOUNTS_REFRESH_PATH, TRAE_MODELS_REFRESH_PATH, TRAE_USAGE_PATH } from '../status-paths.ts'
+import {
+  nextRegionSlots,
+  TRAE_ACCOUNTS_REFRESH_PATH,
+  TRAE_MODELS_REFRESH_PATH,
+  TRAE_REGIONS,
+  TRAE_USAGE_PATH,
+  withTraeRegion,
+} from '../status-paths.ts'
 import type { TraeWebModel, TraeWebUsage } from '../status-paths.ts'
+import type { TraeRegion } from '../region.ts'
 import { TRAE_PLUGIN_ICON } from './icon.ts'
 import { TRAE_CARD_CSS } from './styles.ts'
 import type { TraeSettingsKey } from './locales.ts'
@@ -33,6 +41,20 @@ export type TraeUsageCardProps =
 
 const POLL_INTERVAL_MS = 60_000
 const TRAE_GITHUB_URL = 'https://github.com/dingminhua/dsh-connect-trae'
+
+/** One region's unsaved model edits; switching tabs never drops these. */
+interface TraeDraft {
+  models: TraeWebModel[]
+  enabledIds: Set<string>
+  imageIds: Set<string>
+  contextBudgets: Record<string, number>
+}
+
+/** Read the per-region account selections out of the settings snapshot. */
+function configuredAccountsOf(configured: unknown): Record<string, string> {
+  const accounts = (configured as { accounts?: unknown } | undefined)?.accounts
+  return typeof accounts === 'object' && accounts !== null ? accounts as Record<string, string> : {}
+}
 
 /** Inject the shared card CSS once. */
 if (typeof document !== 'undefined') {
@@ -79,13 +101,18 @@ function dotStyle(status: TraeWebUsage['status']): Record<string, string> {
 export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   if (t === undefined) throw new Error('Trae usage card requires its translation function')
   const [open, setOpen] = useState(false)
-  const [status, setStatus] = useState<TraeWebUsage>({ status: 'signed-out', accounts: [] })
+  /** The region whose tab is on screen; each tab is its own provider stack. */
+  const [activeRegion, setActiveRegion] = useState<TraeRegion>('cn')
+  /** Last-known usage per region, so tab dots survive tab switches. */
+  const [statusByRegion, setStatusByRegion] = useState<Partial<Record<TraeRegion, TraeWebUsage>>>({
+    cn: { status: 'signed-out', accounts: [] },
+    ai: { status: 'signed-out', accounts: [] },
+  })
   const [busy, setBusy] = useState(false)
   const [settingsRevision, setSettingsRevision] = useState(0)
-  const [draftModels, setDraftModels] = useState<TraeWebModel[] | undefined>(undefined)
-  const [draftEnabledIds, setDraftEnabledIds] = useState<Set<string> | undefined>(undefined)
-  const [draftImageIds, setDraftImageIds] = useState<Set<string> | undefined>(undefined)
-  const [draftContextBudgets, setDraftContextBudgets] = useState<Record<string, number> | undefined>(undefined)
+  /** Per-region unsaved model edits; a draft on one tab is never dropped by
+   * switching to the other tab, only by that tab's discard/save. */
+  const [drafts, setDrafts] = useState<Partial<Record<TraeRegion, TraeDraft>>>({})
   const [saving, setSaving] = useState(false)
   const [switchingAccount, setSwitchingAccount] = useState(false)
   const mounted = useRef(true)
@@ -97,20 +124,29 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
 
   useEffect(() => settingsScope?.subscribe(() => { setSettingsRevision(value => value + 1) }), [settingsScope])
 
-  const refreshUsage = useCallback(async (signal?: AbortSignal): Promise<TraeWebUsage | undefined> => {
+  const refreshUsage = useCallback(async (
+    region: TraeRegion,
+    signal?: AbortSignal,
+  ): Promise<TraeWebUsage | undefined> => {
     try {
-      const response = await fetch(TRAE_USAGE_PATH, {
+      const response = await fetch(withTraeRegion(TRAE_USAGE_PATH, region), {
         headers: { accept: 'application/json' },
         credentials: 'same-origin',
         ...signal === undefined ? {} : { signal },
       })
       const value: unknown = await response.json().catch(() => undefined)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      if (mounted.current && signal?.aborted !== true) setStatus(value as TraeWebUsage)
-      return value as TraeWebUsage
+      const usage = value as TraeWebUsage
+      if (mounted.current && signal?.aborted !== true) {
+        setStatusByRegion(prev => ({ ...prev, [region]: usage }))
+      }
+      return usage
     } catch (error: unknown) {
       if (mounted.current && signal?.aborted !== true) {
-        setStatus({ status: 'error', message: error instanceof Error ? error.message : t('row.requestFailed') })
+        setStatusByRegion(prev => ({
+          ...prev,
+          [region]: { status: 'error', message: error instanceof Error ? error.message : t('row.requestFailed') },
+        }))
       }
       return undefined
     }
@@ -119,37 +155,36 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   useEffect(() => {
     if (!open) return
     const controller = new AbortController()
-    void refreshUsage(controller.signal)
+    void refreshUsage(activeRegion, controller.signal)
     return () => { controller.abort() }
-  }, [open, refreshUsage])
+  }, [open, activeRegion, refreshUsage])
+
+  const status: TraeWebUsage = statusByRegion[activeRegion] ?? { status: 'signed-out', accounts: [] }
 
   useEffect(() => {
     if (!open || status.status !== 'signed-in') return
     const controller = new AbortController()
-    const timer = window.setInterval(() => { void refreshUsage(controller.signal) }, POLL_INTERVAL_MS)
+    const timer = window.setInterval(() => { void refreshUsage(activeRegion, controller.signal) }, POLL_INTERVAL_MS)
     return () => {
       window.clearInterval(timer)
       controller.abort()
     }
-  }, [open, refreshUsage, status.status])
+  }, [open, activeRegion, refreshUsage, status.status])
 
   const rescanAccounts = async (): Promise<void> => {
     setBusy(true)
     try {
-      const response = await fetch(TRAE_ACCOUNTS_REFRESH_PATH, {
+      const response = await fetch(withTraeRegion(TRAE_ACCOUNTS_REFRESH_PATH, activeRegion), {
         method: 'POST', headers: { accept: 'application/json' }, credentials: 'same-origin',
       })
       const body = await response.json() as { accounts?: { id: string; selected: boolean }[] }
       if (!response.ok || !Array.isArray(body.accounts)) throw new Error(`HTTP ${response.status}`)
       const selected = body.accounts.find(account => account.selected)?.id
-      const configured = settingsScope?.getSnapshot().value
-      const configuredId = typeof configured === 'object' && configured !== null && typeof (configured as { accountId?: unknown }).accountId === 'string'
-        ? (configured as { accountId: string }).accountId
-        : undefined
-      if (selected !== undefined && selected !== configuredId && settingsScope?.getSnapshot().writable === true) {
-        await settingsScope.set('accountId', selected)
+      const configured = configuredAccountsOf(settingsScope?.getSnapshot().value)
+      if (selected !== undefined && selected !== configured[activeRegion] && settingsScope?.getSnapshot().writable === true) {
+        await settingsScope.set('accounts', { ...configured, [activeRegion]: selected })
       }
-      await refreshUsage()
+      await refreshUsage(activeRegion)
     } finally {
       if (mounted.current) setBusy(false)
     }
@@ -159,8 +194,9 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
     if (settingsScope === undefined) return
     setSwitchingAccount(true)
     try {
-      await settingsScope.set('accountId', accountId)
-      await refreshUsage()
+      const configured = configuredAccountsOf(settingsScope.getSnapshot().value)
+      await settingsScope.set('accounts', { ...configured, [activeRegion]: accountId })
+      await refreshUsage(activeRegion)
     } finally {
       if (mounted.current) setSwitchingAccount(false)
     }
@@ -169,7 +205,7 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   const refreshModels = async (): Promise<void> => {
     setBusy(true)
     try {
-      const response = await fetch(TRAE_MODELS_REFRESH_PATH, {
+      const response = await fetch(withTraeRegion(TRAE_MODELS_REFRESH_PATH, activeRegion), {
         method: 'POST',
         headers: { accept: 'application/json' },
         credentials: 'same-origin',
@@ -188,23 +224,31 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
         const budget = activeContextBudgets[id]
         if (typeof budget === 'number') stillBudgets[id] = budget
       }
-      setDraftModels(fresh.map(model => ({ ...model, input: ['text'] })))
-      setDraftEnabledIds(new Set(stillEnabled))
-      setDraftImageIds(new Set(stillImages))
-      setDraftContextBudgets(stillBudgets)
+      setDrafts(prev => ({
+        ...prev,
+        [activeRegion]: {
+          models: fresh.map(model => ({ ...model, input: ['text'] as const })),
+          enabledIds: new Set(stillEnabled),
+          imageIds: new Set(stillImages),
+          contextBudgets: stillBudgets,
+        },
+      }))
     } catch (error: unknown) {
-      if (mounted.current) setStatus({ status: 'error', message: error instanceof Error ? error.message : t('row.requestFailed') })
+      if (mounted.current) setStatusByRegion(prev => ({
+        ...prev,
+        [activeRegion]: { status: 'error', message: error instanceof Error ? error.message : t('row.requestFailed') },
+      }))
     } finally {
       if (mounted.current) setBusy(false)
     }
   }
 
   const settingsValue = settingsScope?.getSnapshot().value
-  // Region-scoped saved state: the signed-in account's own slot first; the
+  // Region-scoped saved state: the active tab's own slot first; the
   // pre-region-split flat fields are only read for cn (the Host reads them the
   // same way, see regionStateOf), so a budget set on one region's model is
   // never applied to the other's.
-  const region = status.status === 'signed-in' ? status.region : 'cn'
+  const region: TraeRegion = activeRegion
   const configuredRegions = typeof settingsValue === 'object' && settingsValue !== null && typeof (settingsValue as { regions?: unknown }).regions === 'object' && (settingsValue as { regions?: unknown }).regions !== null
     ? (settingsValue as { regions: Record<string, { contextBudgets?: unknown; imageModelIds?: unknown[] }> }).regions
     : {}
@@ -229,40 +273,58 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   // carries `lastCatalog`), never a stale saved snapshot. Enabled flags come
   // from the user's stored selection, re-mapped onto the current catalog by
   // model id (= Trae name); context budgets work the same way.
-  const visibleModels = draftModels ?? (status.status === 'signed-in' ? status.models : [])
+  const draft = drafts[activeRegion]
+  const visibleModels = draft?.models ?? (status.status === 'signed-in' ? status.models : [])
   const savedEnabledIds = status.status === 'signed-in' ? new Set(status.enabledModelIds) : new Set<string>()
-  const activeEnabledIds = draftEnabledIds ?? savedEnabledIds
-  const activeImageIds = draftImageIds ?? savedImageIds
-  const activeContextBudgets = draftContextBudgets ?? savedContextBudgets
-  const dirty = draftModels !== undefined || draftEnabledIds !== undefined || draftImageIds !== undefined || draftContextBudgets !== undefined
+  const activeEnabledIds = draft?.enabledIds ?? savedEnabledIds
+  const activeImageIds = draft?.imageIds ?? savedImageIds
+  const activeContextBudgets = draft?.contextBudgets ?? savedContextBudgets
+  const dirty = draft !== undefined
+
+  /** Apply an edit to the ACTIVE tab's draft, seeding it from the current view. */
+  const editDraft = (edit: (current: TraeDraft) => TraeDraft): void => {
+    setDrafts(prev => ({
+      ...prev,
+      [activeRegion]: edit(prev[activeRegion] ?? {
+        models: [...visibleModels],
+        enabledIds: new Set(activeEnabledIds),
+        imageIds: new Set(activeImageIds),
+        contextBudgets: { ...activeContextBudgets },
+      }),
+    }))
+  }
 
   const toggleModel = (modelId: string): void => {
-    const next = new Set(activeEnabledIds)
-    if (!next.delete(modelId)) next.add(modelId)
-    setDraftEnabledIds(next)
-    setDraftModels([...visibleModels])
+    editDraft(current => {
+      const next = new Set(current.enabledIds)
+      if (!next.delete(modelId)) next.add(modelId)
+      return { ...current, enabledIds: next }
+    })
   }
 
   const toggleImage = (modelId: string): void => {
-    const next = new Set(activeImageIds)
-    if (!next.delete(modelId)) next.add(modelId)
-    setDraftImageIds(next)
-    setDraftModels([...visibleModels])
+    editDraft(current => {
+      const next = new Set(current.imageIds)
+      if (!next.delete(modelId)) next.add(modelId)
+      return { ...current, imageIds: next }
+    })
   }
 
   const setContextBudget = (modelId: string, budget: number | undefined): void => {
-    const next = { ...activeContextBudgets }
-    if (budget === undefined) delete next[modelId]
-    else next[modelId] = budget
-    setDraftContextBudgets(next)
-    setDraftModels([...visibleModels])
+    editDraft(current => {
+      const next = { ...current.contextBudgets }
+      if (budget === undefined) delete next[modelId]
+      else next[modelId] = budget
+      return { ...current, contextBudgets: next }
+    })
   }
 
   const discardModels = (): void => {
-    setDraftModels(undefined)
-    setDraftEnabledIds(undefined)
-    setDraftImageIds(undefined)
-    setDraftContextBudgets(undefined)
+    setDrafts(prev => {
+      const next = { ...prev }
+      delete next[activeRegion]
+      return next
+    })
   }
 
   const saveModels = async (): Promise<void> => {
@@ -273,17 +335,17 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
       // derives the runtime catalog from these on save/restart, so re-opening
       // the card re-reads Trae's current catalog instead of a stale snapshot.
       // The CN and international apps expose different rosters, so the write
-      // targets the slot keyed by the signed-in account's region: switching
-      // accounts no longer clobbers the other region's picks.
+      // targets the slot keyed by the active tab's region: the other region's
+      // picks are never touched.
       if (status.status !== 'signed-in') return
-      await settingsScope.set('regions', nextRegionSlots(configuredRegions, status.region, {
+      await settingsScope.set('regions', nextRegionSlots(configuredRegions, activeRegion, {
         lastCatalog: visibleModels.map(model => ({ ...model, input: ['text'] })),
         enabledModelIds: [...activeEnabledIds],
         imageModelIds: [...activeImageIds].filter(id => activeEnabledIds.has(id)),
         contextBudgets: activeContextBudgets,
       }))
       discardModels()
-      await refreshUsage()
+      await refreshUsage(activeRegion)
     } finally {
       if (mounted.current) setSaving(false)
     }
@@ -320,6 +382,27 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
       <div className="dsm-plugin-card-body" hidden={!open}>
         {open
           ? <div className="dsm-trae-usage">
+              <div className="dsm-trae-tabs" role="tablist" aria-label={title}>
+                {TRAE_REGIONS.map(item => {
+                  const regionStatus = statusByRegion[item]
+                  return (
+                    <button
+                      key={item}
+                      type="button"
+                      role="tab"
+                      aria-selected={item === activeRegion}
+                      className={`dsm-trae-tab${item === activeRegion ? ' dsm-trae-tab-active' : ''}`}
+                      onClick={() => { setActiveRegion(item) }}
+                    >
+                      {regionStatus === undefined
+                        ? null
+                        : <span aria-hidden="true" className="dsm-trae-tab-dot" style={dotStyle(regionStatus.status)} />}
+                      {item === 'cn' ? t('row.tabCn') : t('row.tabAi')}
+                    </button>
+                  )
+                })}
+              </div>
+              <p className="dsm-trae-tab-hint">{t('row.tabHint')}</p>
               <div className="dsm-trae-usage-account">
                 <div className="dsm-trae-usage-account-copy" role="status">
                   <div className="dsm-trae-usage-status">

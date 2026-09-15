@@ -38,6 +38,14 @@ export interface TraeCredentialStoreOptions {
   edition?: TraeEdition | 'auto'
   accountId?: string
   ownPath?: string
+  /**
+   * Region this store serves. When set, only credentials whose own claim maps
+   * to this region are discovered, selected, or refreshed — the two regions'
+   * stores run side by side without seeing each other's accounts.
+   */
+  region?: TraeRegion
+  /** Legacy single-copy path read as a migration source; injectable for tests. */
+  legacyOwnPath?: string
   refresh: (credential: TraeCredential) => Promise<TraeRefreshOutcome>
   refreshMarginMs?: number
 }
@@ -71,7 +79,24 @@ const CLI_DEFAULT_HOST = 'https://api.trae.cn'
 const OWN_VERSION = 1
 export const TRAE_AUTH_FILENAME = '.trae-auth.json'
 
-export function traeOwnAuthPath(): string {
+/** Prefix of the plugin-owned per-region credential copies. */
+const TRAE_OWN_PREFIX = '.trae-auth'
+
+/**
+ * Plugin-owned copy path for one region. Each region's store refreshes into
+ * its own file so two simultaneously signed-in regions never overwrite each
+ * other's refreshed token.
+ */
+export function traeOwnAuthPath(region: TraeRegion): string {
+  return join(resolveDshHome(), `${TRAE_OWN_PREFIX}.${region}.json`)
+}
+
+/**
+ * Pre-dual-provider single-copy path. Still read as a migration source (a
+ * legacy credential serves the region it belongs to until that region's own
+ * first refresh writes the per-region file), and removed by `logout`.
+ */
+export function legacyTraeOwnAuthPath(): string {
   return join(resolveDshHome(), TRAE_AUTH_FILENAME)
 }
 
@@ -148,7 +173,10 @@ export class TraeCredentialStore {
   private storagePathOverride: string | undefined
   private edition: TraeEdition | 'auto'
   private accountId: string | undefined
-  private readonly ownPath: string
+  private readonly region: TraeRegion | undefined
+  private readonly ownPathExplicit: string | undefined
+  private readonly legacyOwnPath: string
+  private readonly legacyOwnPathExplicit: string | undefined
   private readonly refresh: TraeCredentialStoreOptions['refresh']
   private readonly refreshMarginMs: number
   private inflight: Promise<TraeCredential> | undefined
@@ -157,9 +185,49 @@ export class TraeCredentialStore {
     this.storagePathOverride = options.storagePath
     this.edition = options.edition ?? 'auto'
     this.accountId = options.accountId
-    this.ownPath = options.ownPath ?? traeOwnAuthPath()
+    this.region = options.region
+    this.ownPathExplicit = options.ownPath
+    this.legacyOwnPath = options.legacyOwnPath ?? legacyTraeOwnAuthPath()
+    this.legacyOwnPathExplicit = options.legacyOwnPath
     this.refresh = options.refresh
     this.refreshMarginMs = options.refreshMarginMs ?? 5 * 60_000
+  }
+
+  /** Whether a credential's own claim belongs to this store's region. */
+  private matchesRegion(credential: TraeCredential): boolean {
+    return this.region === undefined || regionOfCredential(credential) === this.region
+  }
+
+  /**
+   * The path this store refreshes into: the per-region file for a
+   * region-scoped store, the legacy single file otherwise, or an explicitly
+   * injected path in tests.
+   */
+  ownAuthPath(): string {
+    if (this.ownPathExplicit !== undefined) return this.ownPathExplicit
+    return this.region !== undefined ? traeOwnAuthPath(this.region) : this.legacyOwnPath
+  }
+
+  /**
+   * Every plugin-owned copy to read, most preferred first. A region-scoped
+   * store reads the legacy single copy as its migration source (readAll's
+   * region filter drops it when it carries the other region's credential); an
+   * unscoped store reads everything so diagnostics see both regions.
+   *
+   * With an explicitly injected own path the legacy source is read ONLY when
+   * it was injected too — a test that pins one file must not accidentally see
+   * the real machine's legacy copy.
+   */
+  private ownCandidates(): string[] {
+    if (this.ownPathExplicit !== undefined) {
+      return this.legacyOwnPathExplicit !== undefined
+        ? [this.ownPathExplicit, this.legacyOwnPathExplicit]
+        : [this.ownPathExplicit]
+    }
+    if (this.region !== undefined) {
+      return [traeOwnAuthPath(this.region), this.legacyOwnPath]
+    }
+    return [this.legacyOwnPath, traeOwnAuthPath('cn'), traeOwnAuthPath('ai')]
   }
 
   setSource(storagePath: string | undefined, edition: TraeEdition | 'auto' = 'auto', accountId?: string): void {
@@ -257,19 +325,39 @@ export class TraeCredentialStore {
     return false
   }
 
+  /**
+   * Remove every plugin-owned copy this store could read (per-region file,
+   * legacy single file, and their lock siblings); the desktop storage files
+   * are untouched. A region store's logout therefore also clears the legacy
+   * migration source — deliberate: `logout` is the user's "forget what the
+   * plugin stored" action, not a per-account toggle.
+   */
   async logout(): Promise<void> {
-    await rm(this.ownPath, { force: true })
-    await rm(`${this.ownPath}.lock`, { force: true })
+    for (const path of this.ownCandidates()) {
+      await rm(path, { force: true })
+      await rm(`${path}.lock`, { force: true })
+    }
   }
 
+  /**
+   * Every local credential of this store's region, deduplicated by account id.
+   * A region-scoped store sees only its own region's credentials: the other
+   * region's accounts are invisible to selection, refresh, and status alike,
+   * which is what keeps the two regions' providers from cross-billing.
+   */
   private async readAll(): Promise<TraeCredential[]> {
     const { credentials: desktop } = await this.readDesktopAll()
-    const own = await this.readOwn()
-    // The own copy is accepted for every edition: it is a refresh result the
-    // plugin itself wrote, so an international account's refreshed credential
-    // must not be dropped just because it is not a CN edition.
-    if (own === undefined || desktop.some(credential => traeAccountId(credential) === traeAccountId(own))) return desktop
-    return [...desktop, own]
+    const scoped = desktop.filter(credential => this.matchesRegion(credential))
+    // The own copies are accepted for every edition: they are refresh results
+    // the plugin itself wrote, so an international account's refreshed
+    // credential must not be dropped just because it is not a CN edition.
+    const credentials = [...scoped]
+    for (const own of await this.readOwns()) {
+      if (!this.matchesRegion(own)) continue
+      if (credentials.some(credential => traeAccountId(credential) === traeAccountId(own))) continue
+      credentials.push(own)
+    }
+    return credentials
   }
 
   /**
@@ -369,9 +457,21 @@ export class TraeCredentialStore {
     return { credentials, failures }
   }
 
-  private async readOwn(): Promise<TraeCredential | undefined> {
-    try { return parseOwn(await readFile(this.ownPath, 'utf8')) }
-    catch { return undefined }
+  /**
+   * Every readable plugin-owned copy, in candidate order; absent or corrupt
+   * files are skipped rather than propagated.
+   */
+  private async readOwns(): Promise<TraeCredential[]> {
+    const copies: TraeCredential[] = []
+    for (const path of this.ownCandidates()) {
+      try {
+        const parsed = parseOwn(await readFile(path, 'utf8'))
+        if (parsed !== undefined) copies.push(parsed)
+      } catch {
+        // absent or unreadable — the next candidate is tried
+      }
+    }
+    return copies
   }
 
   private async refreshNow(credential: TraeCredential): Promise<TraeCredential> {
@@ -390,8 +490,9 @@ export class TraeCredentialStore {
         ...outcome.host === undefined ? {} : { host: outcome.host },
         source: 'dsh',
       }
-      await withFileLock(this.ownPath, async () => {
-        await writeFileAtomic(this.ownPath, `${JSON.stringify({ version: OWN_VERSION, credential: refreshed }, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
+      const ownPath = this.ownAuthPath()
+      await withFileLock(ownPath, async () => {
+        await writeFileAtomic(ownPath, `${JSON.stringify({ version: OWN_VERSION, credential: refreshed }, null, 2)}\n`, { mode: 0o600, dirMode: 0o700 })
       })
       return refreshed
     } catch (error: unknown) {
