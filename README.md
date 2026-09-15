@@ -10,6 +10,7 @@
   <a href="README.en.md">English</a> ·
   <a href="#安装">安装</a> ·
   <a href="#工作原理">工作原理</a> ·
+  <a href="#模型覆盖范围哪些-trae-模型能用">模型覆盖范围</a> ·
   <a href="CHANGELOG.md">更新日志</a> ·
   <a href="https://github.com/dingminhua/dsh-connect-trae/issues">问题反馈</a>
 </p>
@@ -55,6 +56,40 @@ DSH PiAiAdapter（每个 provider 一套）
 用量概览走 `https://api.trae.cn/trae/api/v2/pay/*` 与 `/trae/api/v2/ug/*` 只读接口（国际账号走其自有网关的订阅状态端点）。刷新得到的 token 按区域存放在 `$DSH_HOME/.trae-auth.cn.json` 与 `$DSH_HOME/.trae-auth.ai.json`（两个账号同时在线互不覆盖；旧的单文件 `.trae-auth.json` 作为迁移来源保留读取）。
 
 > 详见 `docs/IMPLEMENTATION_PLAN.md`、`docs/SOLO_ROUTE_DECISION.md`、`docs/USAGE_API_RESEARCH.md`。
+
+## 模型覆盖范围（哪些 Trae 模型能用）
+
+Trae IDE 的模型菜单里会出现一些插件**无法提供**的模型。这不是还没做，而是上游没有对第三方开放可复用的模型出口——已经逐条实测并记录在 [`docs/TRAECLI_FEASIBILITY.md`](docs/TRAECLI_FEASIBILITY.md)、[`docs/DS41_CALLABILITY.md`](docs/DS41_CALLABILITY.md) 与 [`docs/CODEC_CHANNEL_FEASIBILITY.md`](docs/CODEC_CHANNEL_FEASIBILITY.md)。
+
+**可用**：SOLO 通道的全部模型（`DeepSeek-V4-Flash-Official`、`DeepSeek-V4-Pro-Official`、`GLM-5.3`、`GLM-5.2`、`Kimi-K3`、`MiniMax-M3`、`Qwen3.8-Max`、`Doubao-Seed-*` 等），国内版与国际版均走这条通道，且**已实测支持结构化工具调用**（DSH 本地执行工具的前提）。
+
+**不可用**：以下 4 个模型只存在于 **Trae IDE 客户端内部**，插件与任何第三方 API 消费者都拿不到，已从模型目录中排除：
+
+| 模型 | 说明 |
+| --- | --- |
+| `deepseek-v4.1-flash` | 仅出现在 Trae IDE 的模型菜单 |
+| `glm-5.3-flash` | 同上 |
+| `kimi-k2.8-preview` | 同上 |
+| `qwen3.8-flash` | 同上 |
+
+> 注意区分：**`GLM-5.3` 可用**（SOLO 通道 `solo_work_remote`，已实测工具调用），但 **`glm-5.3-flash` 不可用**——两者是不同的模型。
+
+### 为什么拿不到
+
+四条路径都已逐一实测，**各自因不同原因失败**（协议 / 配额 / 同机 / 登录态）：
+
+| 路径 | 实测结果 |
+| --- | --- |
+| `create_agent_task` | 绑定层已解开（HTTP 200 + SSE），业务层返回 `4001 config item is empty`——需要 IDE 客户端注册的 config |
+| `/api/ide/v1/agents/runs` | 端点存在、鉴权通过，返回账号级 `5003 agent running quota limit is exceeded` |
+| 本地 Hub Bridge / Aha IPC | 存在，但为私有协议，且要求 IDE 同机常驻 |
+| TraeCLI（`trae-cli`） | 公网版需要交互式 SSO 登录；且它**本身就是 agent**，模型出口是私有后端（`/trae-cli/api/v1/llm/proxy` + 私有头），不是可复用的 LLM 代理 |
+
+前三条属于「没有对第三方开放」；第四条尤其要注意——**用 TraeCLI 就等于让 TraeCLI 干活、DSH 退化成壳**，与「DSH 是 agent、模型只负责生成工具调用」的插件定位相冲突，因此插件不会走这条路，也不建议用户为此安装 TraeCLI。
+
+### 想用这 4 个模型怎么办
+
+**直接用 Trae IDE 本体**。插件不提供、也无法提供它们；这属于上游授权边界，不是本插件可以绕过的技术问题。
 
 ## 安装
 
