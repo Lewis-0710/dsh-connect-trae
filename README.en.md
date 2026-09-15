@@ -10,7 +10,7 @@
   <a href="README.md">中文</a> ·
   <a href="#install">Install</a> ·
   <a href="#how-it-works">How it works</a> ·
-  <a href="#model-coverage-which-trae-models-work">Model coverage</a> ·
+  <a href="#model-coverage">Model coverage</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="https://github.com/dingminhua/dsh-connect-trae/issues">Issues</a>
 </p>
@@ -57,39 +57,24 @@ Usage overview hits the read-only `https://api.trae.cn/trae/api/v2/pay/*` and `/
 
 > See `docs/IMPLEMENTATION_PLAN.md`, `docs/SOLO_ROUTE_DECISION.md`, `docs/USAGE_API_RESEARCH.md`.
 
-## Model coverage (which Trae models work)
+## Model coverage
 
-The Trae IDE model menu lists a few models this plugin **cannot** provide. That is not unfinished work — upstream simply exposes no reusable model endpoint to third-party API consumers. Each path was tested and recorded in [`docs/TRAECLI_FEASIBILITY.md`](docs/TRAECLI_FEASIBILITY.md), [`docs/DS41_CALLABILITY.md`](docs/DS41_CALLABILITY.md), and [`docs/CODEC_CHANNEL_FEASIBILITY.md`](docs/CODEC_CHANNEL_FEASIBILITY.md).
+This plugin serves models from Trae's **SOLO channel** (`DeepSeek-V4-Flash-Official`, `DeepSeek-V4-Pro-Official`, `GLM-5.3`, `GLM-5.2`, `Kimi-K3`, `MiniMax-M3`, `Qwen3.8-Max`, `Doubao-Seed-*`, …), for both the domestic and international sides.
 
-**Available**: every model on the SOLO channel (`DeepSeek-V4-Flash-Official`, `DeepSeek-V4-Pro-Official`, `GLM-5.3`, `GLM-5.2`, `Kimi-K3`, `MiniMax-M3`, `Qwen3.8-Max`, `Doubao-Seed-*`, …), for both the domestic and international sides — and all of them **verifiably return structured tool calls**, which the DSH local tool loop requires.
+The following four models currently come from the **TraeCode (Trae IDE) channel** and have **not** been opened up to the SOLO channel, so this plugin does **not** support them yet:
 
-**Unavailable**: these four models exist only inside the **Trae IDE client**. Neither this plugin nor any third-party API consumer can reach them, so they are excluded from the catalog:
+| Model |
+| --- |
+| `deepseek-v4.1-flash` |
+| `glm-5.3-flash` |
+| `kimi-k2.8-preview` |
+| `qwen3.8-flash` |
 
-| Model | Note |
-| --- | --- |
-| `deepseek-v4.1-flash` | Only appears in the Trae IDE model menu |
-| `glm-5.3-flash` | Same |
-| `kimi-k2.8-preview` | Same |
-| `qwen3.8-flash` | Same |
+These four are reachable only inside the Trae IDE client; there is no callable channel for them on the plugin side. **They can only be supported once Trae officially opens them up to the SOLO channel.**
 
-> Note the distinction: **`GLM-5.3` works** (SOLO channel, `solo_work_remote`, tool calls verified), but **`glm-5.3-flash` does not** — they are different models.
+> Note the distinction: **`GLM-5.3` is supported** (it goes through the SOLO channel), but **`glm-5.3-flash` is not** — they are different models.
 
-### Why they are out of reach
-
-All four paths were tested and **each fails for a different reason** (protocol / quota / co-residency / sign-in state):
-
-| Path | Result |
-| --- | --- |
-| `create_agent_task` | Binder solved (HTTP 200 + SSE); business layer returns `4001 config item is empty` — needs a client-registered config |
-| `/api/ide/v1/agents/runs` | Endpoint exists and auth passes, but returns account-level `5003 agent running quota limit is exceeded` |
-| Local Hub Bridge / Aha IPC | Exists, but it is a private protocol and requires the IDE to be co-resident |
-| TraeCLI (`trae-cli`) | The public build needs interactive SSO sign-in; and it **is itself an agent**, with a private backend as its model outlet (`/trae-cli/api/v1/llm/proxy` plus private headers) rather than a reusable LLM proxy |
-
-The first three mean "not opened up to third parties". The fourth deserves emphasis — **driving TraeCLI would mean TraeCLI does the work and DSH degrades into a shell**, which contradicts the plugin's premise of "DSH is the agent; the model only produces tool calls". The plugin therefore will not take that route, and does not suggest installing TraeCLI for it.
-
-### Want to use these four models?
-
-**Use the Trae IDE itself.** The plugin does not — and cannot — offer them; this is an upstream authorization boundary, not a technical problem the plugin can work around.
+To use these four models today, use the **Trae IDE itself**.
 
 ## Install
 
