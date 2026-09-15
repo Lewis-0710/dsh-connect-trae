@@ -620,7 +620,7 @@ export function apply(ctx: Context, config: Config): void {
         settingsNs: TRAE_SETTINGS_NS,
         settingsPath: [],
         declared: false,
-      })))
+      }])
     } finally {
       if (releaseAdapterCn === undefined || releaseAdapterAi === undefined || releaseDirectory === undefined) {
         // Registration threw; release whichever half landed.
