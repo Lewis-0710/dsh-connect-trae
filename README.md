@@ -2,11 +2,11 @@
 > **Fork 维护版本** | 本仓库是 [dingminhua/dsh-connect-trae](https://github.com/dingminhua/dsh-connect-trae) 的维护分支。
 > 
 > **与上游差异**：
-> 1. 重写 TraeUsageCard 组件，支持用量图表与配额重置倒计时
-2. 扩展模型目录（catalog），增加模型元数据与状态路径定义
-3. 优化 adapter 层以兼容 DSH 客户端包拆分
-4. 添加中文本地化文案与自定义样式
-5. 扩展测试套件覆盖模型目录与元数据验证
+> 1. 入口与 Provider 分组名称统一定制为 `TraeWork` / `TraeWork Global`
+> 2. 支持识别受限模型并展示「会员计划」徽标与别名标识
+> 3. 模型别名展示倍率（如 `(0.77x)`），保持底层原始模型 ID 纯净
+> 4. 优化「恢复默认」与「从Trae刷新」逻辑（默认选中 $\ge 1\text{M}$ 上下文模型，自动匹配多模态与最大上下文大小）
+> 5. 增强配置持久化，保留倍率、最大上下文及会员限制等扩展元数据
 > 
 > 详见 [sync.patch](./sync.patch)。
 
