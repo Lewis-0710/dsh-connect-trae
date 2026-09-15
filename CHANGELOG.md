@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.3 (2026-09-16)
+
+### Fixes
+
+- **修复内置兜底目录里存在「不可调用模型」的问题**——插件在首次实时刷新落地前会先提供一份内置兜底模型列表，且这份列表**故意不经过「死 config_name」过滤**（过滤依赖实时目录，会把兜底本身误删）。因此它的 id 必须在源头就是正确的 `llm_utils_chat` config_name，而它此前不是：
+  - `auto` 不是任何 Trae 的 config_name，选中后会以 `4001` 失败——已移除。该条目会在「尚未刷新目录」时（未登录 / 网络抖动 / 卡片未刷新）被真正提供给用户，因此并非理论问题。
+  - `DeepSeek-V4-Flash` / `DeepSeek-V4-Pro` 缺少 `-Official` 后缀，不是真实 wire id——已更正为 `DeepSeek-V4-Flash-Official` / `DeepSeek-V4-Pro-Official`（依据 2026-09-15 实测目录，`docs/DS41_CALLABILITY.md`）。
+  - 新增回归测试锁定三条不变量：兜底 id 必须是真实 config_name（显式禁 `auto` 与裸名）、两个区域的兜底都不得出现 TraeCode 独占模型、`mergeTraeModelSources` 确实丢弃无 wire 匹配的目录行。
+
+### Docs
+
+- **README 新增「模型覆盖范围」一节（中英同步）**——说明插件提供的是 Trae SOLO 通道的模型，而 TraeCode 通道的 4 个模型（`deepseek-v4.1-flash`、`glm-5.3-flash`、`kimi-k2.8-preview`、`qwen3.8-flash`）尚未开放到 SOLO 通道，因此暂不支持，**需要等官方开放到 SOLO 后才能支持**；并区分了 `GLM-5.3`（支持）与 `glm-5.3-flash`（不支持）。
+- 新增 TraeCode / agent-task 通道与 TraeCLI 的可行性取证（`docs/CODEC_CHANNEL_FEASIBILITY.md`、`docs/TRAECLI_FEASIBILITY.md`、`docs/TRAE_ECOSYSTEM_RESEARCH.md`）：四条路径逐一实测均不通，且阻塞原因互相独立（协议 / 配额 / 同机 / 登录态与 agent 归属），据此确认这批模型属上游授权边界而非插件可绕过的技术问题。
+
 ## 2.0.2 (2026-09-15)
 
 ### Fixes
