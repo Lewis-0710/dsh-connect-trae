@@ -342,6 +342,26 @@ export function apply(ctx: Context, config: Config): void {
     return legacyAccountRegion === region ? value.accountId : undefined
   }
 
+  /**
+   * Retry a directory read once. The gateways answer an intermittent 401 for a
+   * credential that works moments later (observed 2026-09-15), and a failed
+   * skeleton read would otherwise drop the runtime catalog back to the saved
+   * snapshot — hiding every model added since that save (issue #7's glm-5.3
+   * among them).
+   */
+  async function withDirectoryRetry<T>(read: () => Promise<T>): Promise<T> {
+    try {
+      return await read()
+    } catch (first: unknown) {
+      await new Promise(resolve => setTimeout(resolve, 800))
+      try {
+        return await read()
+      } catch {
+        throw first
+      }
+    }
+  }
+
   const stacks = {} as Record<TraeRegion, TraeRegionStack>
   for (const region of REGION_KEYS) {
     const catalog = new TraeCatalog(region)
@@ -481,10 +501,14 @@ export function apply(ctx: Context, config: Config): void {
         // context, credit, reasoning). get_detail_param only supplies the real
         // llm_utils_chat config_name for models whose display id differs from
         // the wire id (e.g. Seed-Code); it does not define the catalog itself.
-        const [remote, wireModels] = await Promise.all([
-          remoteCatalog.fetchModels(signal),
-          solo.fetchModels(signal),
-        ])
+        // The remote directory is the merge skeleton (it is what filters
+        // agent-internal configs out of the wire roster). Trae's directory
+        // endpoints rate-limit aggressively — observed as an intermittent
+        // HTTP 401 on a credential that answers 200 seconds earlier — so a
+        // transient rejection must not silently collapse the whole catalog to
+        // the saved snapshot. Retry it once before giving up.
+        const remote = await withDirectoryRetry(() => remoteCatalog.fetchModels(signal))
+        const wireModels = await solo.fetchModels(signal)
         const merged = mergeTraeModelSources(remote, wireModels)
         // Record every callable display key (id and name) so stale saved
         // catalogs are filtered against the live wire map and dead
