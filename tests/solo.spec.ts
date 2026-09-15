@@ -100,7 +100,11 @@ describe('Trae SOLO protocol', () => {
       model_detail_list: [{ model_name: 'glm-5.2__dev', prompt_max_tokens: 168000, max_tokens: 32000 }],
     }] }), { status: 200, headers: { 'content-type': 'application/json' } }))
     const client = new TraeSoloUpstreamClient({ credential: async () => credential, identity: async () => identity, fetchImpl })
-    await expect(client.fetchModels()).resolves.toEqual([{ id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 168000, maxTokens: 32000 }])
+    // Every row carries the directory function it was found under: the chat
+    // call replays it, because a model is only callable through that function.
+    await expect(client.fetchModels()).resolves.toEqual([
+      { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 168000, maxTokens: 32000, function: 'solo_work_remote' },
+    ])
     // The gateway follows the credential's region: a solo (CN) credential routes
     // to the CN chat gateway even though its host field names a bare origin.
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://trae-api-cn.mchost.guru/api/ide/v1/get_detail_param')
@@ -187,7 +191,7 @@ describe('region-scoped model directory function', () => {
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://coresg-normal.trae.ai/api/ide/v1/get_detail_param')
   })
 
-  it('keeps the CN directory on solo_work_lite', async () => {
+  it('asks every CN directory function, remote variant first', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ config_info_list: [
       { config_name: 'glm-5.2', display_config: { display_name: 'GLM-5.2' }, model_detail_list: [{ prompt_max_tokens: 116000, max_tokens: 32000 }] },
     ] }), { status: 200 }))
@@ -197,7 +201,76 @@ describe('region-scoped model directory function', () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     })
     await client.fetchModels()
-    const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string)
-    expect(body['function']).toBe('solo_work_lite')
+    const functions = fetchImpl.mock.calls.map(call => JSON.parse((call[1] as RequestInit).body as string)['function'])
+    // solo_work_remote is asked FIRST: it is the only CN function that lists
+    // glm-5.3, and precedence decides which function a shared config binds to.
+    expect(functions).toEqual(['solo_work_remote', 'solo_work_lite'])
+  })
+})
+
+describe('multi-function directory union (glm-5.3 regression, issue #7)', () => {
+  const intlCredentialSg: TraeCredential = {
+    accessToken: 'at', userId: 'uid', host: 'https://growsg-normal.trae.ai', userRegion: 'SG',
+    expiresAtMs: Date.now() + 1000, edition: 'solo-sg', source: 'desktop',
+  }
+
+  /** A gateway answering solo_work_remote with an extra config the lite function lacks. */
+  function stubDirectory(): ReturnType<typeof vi.fn> {
+    return vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const fn = JSON.parse(init?.body as string)['function']
+      const entries = fn === 'solo_work_remote'
+        ? [
+            { config_name: 'glm-5.3', display_config: { display_name: 'GLM-5.3' }, model_detail_list: [{ prompt_max_tokens: 168000, max_tokens: 32000 }] },
+            { config_name: 'glm-5.2', display_config: { display_name: 'GLM-5.2' }, model_detail_list: [{ prompt_max_tokens: 168000, max_tokens: 32000 }] },
+          ]
+        : [
+            { config_name: 'glm-5.2', display_config: { display_name: 'GLM-5.2' }, model_detail_list: [{ prompt_max_tokens: 200000, max_tokens: 32000 }] },
+          ]
+      return new Response(JSON.stringify({ config_info_list: entries }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+  }
+
+  it('surfaces a model that only one function lists, tagged with that function', async () => {
+    const fetchImpl = stubDirectory()
+    const client = new TraeSoloUpstreamClient({ credential: async () => credential, identity: async () => identity, fetchImpl: fetchImpl as unknown as typeof fetch })
+    const models = await client.fetchModels()
+    // glm-5.3 exists ONLY under solo_work_remote — the old single-function scan
+    // (solo_work_lite) never saw it, which is exactly issue #7.
+    const glm53 = models.find(model => model.id === 'glm-5.3')
+    expect(glm53).toMatchObject({ id: 'glm-5.3', name: 'GLM-5.3', function: 'solo_work_remote' })
+    // A config listed by both keeps the higher-precedence function.
+    expect(models.find(model => model.id === 'glm-5.2')?.function).toBe('solo_work_remote')
+  })
+
+  it('keeps the other functions working when one of them fails', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const fn = JSON.parse(init?.body as string)['function']
+      if (fn === 'solo_work_remote') return new Response('nope', { status: 500 })
+      return new Response(JSON.stringify({ config_info_list: [
+        { config_name: 'glm-5.2', display_config: { display_name: 'GLM-5.2' }, model_detail_list: [{ prompt_max_tokens: 168000, max_tokens: 32000 }] },
+      ] }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const client = new TraeSoloUpstreamClient({ credential: async () => credential, identity: async () => identity, fetchImpl: fetchImpl as unknown as typeof fetch })
+    await expect(client.fetchModels()).resolves.toMatchObject([{ id: 'glm-5.2', function: 'solo_work_lite' }])
+  })
+
+  it('the ai region asks solo_agent first', async () => {
+    const fetchImpl = stubDirectory()
+    const client = new TraeSoloUpstreamClient({ credential: async () => intlCredentialSg, identity: async () => identity, fetchImpl: fetchImpl as unknown as typeof fetch })
+    await client.fetchModels()
+    const functions = fetchImpl.mock.calls.map(call => JSON.parse((call[1] as RequestInit).body as string)['function'])
+    expect(functions).toEqual(['solo_agent', 'solo_work_remote', 'solo_work_lite'])
+  })
+
+  it('an explicit body function wins over the default chat function', () => {
+    // The bridge stamps the directory function onto the body; prepareSoloBody
+    // must replay it verbatim, otherwise glm-5.3 would be sent as solo_work_lite
+    // and rejected with 4001.
+    const prepared = JSON.parse(prepareSoloBody(JSON.stringify({
+      model: 'glm-5.3', messages: [{ role: 'user', content: 'hi' }], function: 'solo_work_remote',
+    })))
+    expect(prepared['function']).toBe('solo_work_remote')
+    const fallback = JSON.parse(prepareSoloBody(JSON.stringify({ model: 'glm-5.2', messages: [{ role: 'user', content: 'hi' }] })))
+    expect(fallback['function']).toBe('solo_work_lite')
   })
 })

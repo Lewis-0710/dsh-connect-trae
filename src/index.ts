@@ -23,6 +23,7 @@ import { createTraeShim } from './shim.ts'
 import type { TraeShim } from './shim.ts'
 import { TraeSoloUpstreamClient } from './solo.ts'
 import { TraeSoloBridge } from './solo-bridge.ts'
+import type { TraeWireTarget } from './solo-bridge.ts'
 import { TraeSoloRemoteCatalogClient } from './solo-remote.ts'
 import { TraeRawChatUpstreamClient } from './raw-upstream.ts'
 import { createTraeRawGateway } from './raw-gateway.ts'
@@ -195,6 +196,10 @@ const modelConfig = z.object({
   // Declared so the multiplier survives future hosts whose settings schema
   // might strip unknown fields; it feeds the DSH-facing display name.
   creditMultiplier: z.number(),
+  // The directory function this model must be called through (Trae's roster is
+  // split across SOLO-mode functions; glm-5.3 answers only solo_work_remote).
+  // Persisted so a saved directory keeps working after a restart.
+  wireFunction: z.string(),
 })
 
 const regionStateConfig = z.object({
@@ -271,8 +276,8 @@ export function apply(ctx: Context, config: Config): void {
      * flight) and must not be read as "nothing is callable".
      */
     resolved: boolean
-    byId: Map<string, string>
-    byName: Map<string, string>
+    byId: Map<string, TraeWireTarget>
+    byName: Map<string, TraeWireTarget>
   }>
   for (const region of REGION_KEYS) {
     wireState[region] = { callableKeys: new Set(), resolved: false, byId: new Map(), byName: new Map() }
@@ -410,7 +415,7 @@ export function apply(ctx: Context, config: Config): void {
     // other models whose wire id differs from the display id resolve correctly
     // even on a fresh install. The map is per region: the two rosters overlap
     // but are not identical, and a shared map would cross-resolve ids.
-    const wireResolver = (displayId: string): string | undefined =>
+    const wireResolver = (displayId: string): TraeWireTarget | undefined =>
       wire.byId.get(displayId) ?? wire.byName.get(displayId.trim().toLowerCase())
     const upstream = new TraeSoloBridge(solo, catalog, wireResolver)
     // The shim always sees a stable client; the Raw gateway may replace the
@@ -505,8 +510,12 @@ export function apply(ctx: Context, config: Config): void {
         wire.byName.clear()
         for (const model of merged) {
           if (model.wireConfigName !== undefined) {
-            wire.byId.set(model.id, model.wireConfigName)
-            wire.byName.set(model.name.trim().toLowerCase(), model.wireConfigName)
+            const target = {
+              configName: model.wireConfigName,
+              ...model.wireFunction === undefined ? {} : { function: model.wireFunction },
+            }
+            wire.byId.set(model.id, target)
+            wire.byName.set(model.name.trim().toLowerCase(), target)
           }
         }
         // Discovery is a pure data return (workbuddy semantics): the card's

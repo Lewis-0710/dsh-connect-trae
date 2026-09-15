@@ -23,6 +23,8 @@ export interface TraeModelInfo {
   maxContextWindow?: number
   /** The `config_name` `llm_utils_chat` accepts; absent means `id` is already the wire id. */
   wireConfigName?: string
+  /** The directory function this model must be called through (see {@link TraeWireModel.function}). */
+  wireFunction?: string
 }
 
 /** Bootstrap catalog: identity only where current Trae metadata has not been fetched yet. */
@@ -95,6 +97,14 @@ export interface TraeWireModel {
   contextWindow?: number
   maxTokens?: number
   reasoning?: TraeReasoningCapability
+  /**
+   * The `get_detail_param` function this config_name came from. Trae splits its
+   * callable roster across several functions (SOLO modes), and a model is only
+   * callable through the function that actually lists it — glm-5.3 answers
+   * `solo_work_remote` but rejects `solo_work_lite` with 4001. The chat call
+   * therefore has to replay the directory's own function.
+   */
+  function?: string
 }
 
 /** Normalise a display name for cross-source joining. */
@@ -154,6 +164,7 @@ export function mergeTraeModelSources(
         reasoningEfforts: Object.fromEntries(model.reasoning.supported.map(effort => [effort, effort === 'low' ? 'light' : effort === 'xhigh' ? 'extra_high' : 'high'])) as Partial<Record<TraeReasoningEffort, string>>,
       },
       ...wireModel.id !== '' && wireModel.id !== model.id ? { wireConfigName: wireModel.id } : {},
+      ...wireModel.function === undefined ? {} : { wireFunction: wireModel.function },
     })
   }
   return result

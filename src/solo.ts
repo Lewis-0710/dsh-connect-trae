@@ -1,11 +1,27 @@
 import type { TraeCredential } from './auth.ts'
 import type { TraeIdentity } from './identity.ts'
 import { buildTraeCnHeaders, traeEndpoint } from './protocol.ts'
-import { REGION_GATEWAYS, regionOfCredential } from './region.ts'
+import { REGION_GATEWAYS, regionOfCredential, type TraeRegion } from './region.ts'
 import { parseReasoningCapability, type TraeReasoningCapability } from './reasoning.ts'
 import type { TraeChatResult, TraeUpstreamErrorKind } from './upstream.ts'
 
 export const TRAE_SOLO_FUNCTION = 'solo_work_lite'
+
+/**
+ * Directory functions to union per region, in priority order.
+ *
+ * Trae spreads its callable roster across several SOLO-mode functions, and a
+ * model is only usable through the one that lists it: `glm-5.3` is absent from
+ * `solo_work_lite` but present in `solo_work_remote` (verified 2026-09-15 —
+ * calling it through the former answers `4001 param is invalid`, through the
+ * latter streams normally). Rather than betting on a single function, the
+ * directory unions them; the first function to provide a config wins, so the
+ * order below decides which wire name a model is called with.
+ */
+export const TRAE_DIRECTORY_FUNCTIONS: Readonly<Record<TraeRegion, readonly string[]>> = {
+  cn: ['solo_work_remote', TRAE_SOLO_FUNCTION],
+  ai: ['solo_agent', 'solo_work_remote', TRAE_SOLO_FUNCTION],
+}
 export const TRAE_SOLO_CHAT_PATH = '/api/agent/v3/llm_utils_chat'
 export const TRAE_SOLO_MODELS_PATH = '/api/ide/v1/get_detail_param'
 
@@ -22,7 +38,7 @@ function finitePositive(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined
 }
 
-export function prepareSoloBody(source: string, defaultModel = 'glm-5.2'): string {
+export function prepareSoloBody(source: string, defaultModel = 'glm-5.2', functionName?: string): string {
   const input = JSON.parse(source) as Record<string, unknown>
   const requestedModel = typeof input['model'] === 'string' && input['model'].trim() !== '' ? input['model'].trim() : defaultModel
   const model = requestedModel
@@ -33,7 +49,12 @@ export function prepareSoloBody(source: string, defaultModel = 'glm-5.2'): strin
     ...Array.isArray(input['messages']) ? { messages: input['messages'] } : {},
     model,
     config_name: model,
-    function: TRAE_SOLO_FUNCTION,
+    // The directory function that actually lists this model (see
+    // TRAE_DIRECTORY_FUNCTIONS). The bridge may have already stamped the exact
+    // function it learned from the directory, which wins over the default.
+    function: typeof input['function'] === 'string' && input['function'] !== ''
+      ? input['function']
+      : (functionName ?? TRAE_SOLO_FUNCTION),
     stream: true,
     ...Array.isArray(input['tools']) ? { tools: input['tools'] } : {},
     ...typeof input['reasoning_effort'] === 'string' ? { reasoning_effort: input['reasoning_effort'] } : {},
@@ -83,6 +104,8 @@ export interface TraeSoloModel {
   contextWindow?: number
   maxTokens?: number
   reasoning?: TraeReasoningCapability
+  /** The directory function that listed this config (replayed when calling it). */
+  function?: string
 }
 
 export interface TraeSoloClientOptions {
@@ -97,40 +120,61 @@ export class TraeSoloUpstreamClient {
   private readonly fetchImpl: typeof fetch
   constructor(private readonly options: TraeSoloClientOptions) { this.fetchImpl = options.fetchImpl ?? fetch }
 
+  /**
+   * Read the callable roster for this credential's region.
+   *
+   * Every function in {@link TRAE_DIRECTORY_FUNCTIONS} is asked, in order, and
+   * their answers are unioned: the first function to list a `config_name` owns
+   * it. Trae splits its roster across SOLO modes, and a model is only callable
+   * through the function that lists it (glm-5.3 exists solely under
+   * `solo_work_remote` on the CN gateway). Asking one function therefore
+   * silently hides models that the other one serves. The remote directory
+   * remains the merge skeleton, so agent-internal entries (search_agent_*,
+   * paygo variants) never surface even though they appear here.
+   */
   async fetchModels(signal?: AbortSignal): Promise<TraeSoloModel[]> {
     const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()])
     const region = regionOfCredential(credential)
     const base = this.options.baseUrl ?? REGION_GATEWAYS[region].chat
-    // The model-DIRECTORY function is region-scoped while the chat function
-    // stays `solo_work_lite` on both (verified end-to-end on the ai gateway,
-    // 2026-09-15). The international gateway's `solo_work_lite` directory
-    // answers only 14 entries whose config names miss four of the seven
-    // remote-roster models (gemini-3-flash-solo, minimax-m3/m2.7, kimi-k2.5),
-    // which would leave them without a wire config_name and silently drop
-    // them from the merged catalog. Its `solo_agent` directory answers 39
-    // entries covering every remote-roster model, so that is the ai-side
-    // directory function. The remote directory stays the merge skeleton, so
-    // the extra agent-internal entries (search_agent_*, paygo variants) never
-    // surface to the user.
-    const directoryFunction = region === 'ai' ? 'solo_agent' : TRAE_SOLO_FUNCTION
-    const response = await this.fetchImpl(traeEndpoint(base, TRAE_SOLO_MODELS_PATH), {
-      method: 'POST',
-      headers: { ...buildTraeCnHeaders(credential, identity), Accept: 'application/json' },
-      body: JSON.stringify({
-        function: directoryFunction,
-        config_names: null,
-        need_prompt: false,
-        current_config_info: null,
-        poly_prompt: true,
-        mode_type: null,
-        agent_type: null,
-      }),
-      signal: signal ?? AbortSignal.timeout(30_000),
-    })
-    if (!response.ok) throw new Error(`Trae SOLO models returned HTTP ${response.status}`)
-    const document = await response.json() as Record<string, unknown>
-    const list = Array.isArray(document['config_info_list']) ? document['config_info_list'] : []
-    const models: TraeSoloModel[] = []
+    const headers = { ...buildTraeCnHeaders(credential, identity), Accept: 'application/json' }
+    const byId = new Map<string, TraeSoloModel>()
+    const failures: string[] = []
+    for (const directoryFunction of TRAE_DIRECTORY_FUNCTIONS[region]) {
+      let list: unknown[]
+      try {
+        const response = await this.fetchImpl(traeEndpoint(base, TRAE_SOLO_MODELS_PATH), {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            function: directoryFunction,
+            config_names: null,
+            need_prompt: false,
+            current_config_info: null,
+            poly_prompt: true,
+            mode_type: null,
+            agent_type: null,
+          }),
+          signal: signal ?? AbortSignal.timeout(30_000),
+        })
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const document = await response.json() as Record<string, unknown>
+        list = Array.isArray(document['config_info_list']) ? document['config_info_list'] : []
+      } catch (error: unknown) {
+        // One function failing must not hide the others' rosters.
+        failures.push(`${directoryFunction}: ${String(error).slice(0, 80)}`)
+        continue
+      }
+      this.collectModels(list, directoryFunction, byId)
+    }
+    const models = [...byId.values()]
+    if (models.length === 0) {
+      throw new Error(`Trae SOLO models response contained no models (${failures.join('; ') || 'empty directory'})`)
+    }
+    return models
+  }
+
+  /** Merge one function's config list into the shared catalogue (first wins). */
+  private collectModels(list: readonly unknown[], directoryFunction: string, byId: Map<string, TraeSoloModel>): void {
     for (const raw of list) {
       if (typeof raw !== 'object' || raw === null) continue
       const config = raw as Record<string, unknown>
@@ -152,21 +196,24 @@ export class TraeSoloUpstreamClient {
       const contextWindow = promptMaxTokens ?? devTokens
       const maxTokens = finitePositive(detail['max_tokens'])
       const reasoning = parseReasoningCapability({ ...config, ...detail })
-      models.push({
+      // First function to list a config_name owns it: TRAE_DIRECTORY_FUNCTIONS
+      // is ordered by precedence, and this is what makes a model callable (the
+      // chat call replays this exact function).
+      if (byId.has(id)) continue
+      byId.set(id, {
         id,
         name: typeof display['display_name'] === 'string' && display['display_name'] !== '' ? display['display_name'] : id,
         ...contextWindow === undefined ? {} : { contextWindow },
         ...maxTokens === undefined ? {} : { maxTokens },
         ...reasoning === undefined ? {} : { reasoning },
+        function: directoryFunction,
       })
     }
-    if (models.length === 0) throw new Error('Trae SOLO models response contained no models')
-    return models
   }
 
-  async chatStream(bodyJson: string, signal?: AbortSignal): Promise<TraeChatResult> {
+  async chatStream(bodyJson: string, signal?: AbortSignal, functionName?: string): Promise<TraeChatResult> {
     let prepared: string
-    try { prepared = prepareSoloBody(bodyJson) }
+    try { prepared = prepareSoloBody(bodyJson, undefined, functionName) }
     catch { return { ok: false, status: 400, kind: 'client', message: 'invalid JSON request' } }
     const [credential, identity] = await Promise.all([this.options.credential(), this.options.identity()])
     const headers = buildTraeCnHeaders(credential, identity)

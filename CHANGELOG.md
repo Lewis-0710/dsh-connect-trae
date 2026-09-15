@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.2 (2026-09-15)
+
+### Fixes
+
+- **修复「Trae 目录里有、插件列表里没有」的整类问题**（issue #7：GLM-5.3 缺失）——根因是**模型调用的 `function` 选错了**，不是目录读取有误：
+  - Trae 把可调用目录**分散在多个 SOLO 模式 function 下**，且一个模型**只能通过列出它的那个 function 调用**。插件此前固定用 `solo_work_lite` 取目录与发请求，而 `glm-5.3` 只存在于 **`solo_work_remote`**：用前者调用会被上游拒绝（`4001 param is invalid`），用后者则正常流式返回（2026-09-15 受控实测，同一份请求体，仅 function 不同）。
+  - **目录发现改为多 function 并集**：CN 依序请求 `solo_work_remote` → `solo_work_lite`，国际请求 `solo_agent` → `solo_work_remote` → `solo_work_lite`；同一个 config 由**先列出的 function 拥有**（顺序即优先级）。某个 function 失败不再影响其它 function 的目录。
+  - **聊天请求按模型回放其来源 function**：每个模型随目录记下 `wireFunction`（并纳入设置 schema 持久化，重启后仍生效），调用时写回请求体——`glm-5.3` 因而会走 `solo_work_remote`。
+  - 顺带确认：CN 的两个登录（Trae CN IDE 与 TRAE SOLO CN）在同一 function 下拿到**完全相同**的列表，因此该修复对两者一致生效；国际版覆盖最全的仍是 `solo_agent`。
+  - 新增 4 个回归测试（多 function 并集、来源 function 标记、优先级归属、显式 function 覆盖默认值），230/230 全绿。
+
 ## 2.0.1 (2026-09-15)
 
 ### Fixes

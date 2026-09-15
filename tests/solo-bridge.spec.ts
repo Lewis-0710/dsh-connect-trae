@@ -151,7 +151,7 @@ describe('TraeSoloBridge', () => {
     const catalog = {
       current: () => [{ id: 'Doubao-Seed-Code', name: 'Seed-Code', input: ['text'] as ('text' | 'image')[] }],
     }
-    const resolver = (id: string): string | undefined => (id === 'Doubao-Seed-Code' ? 'Doubao_1_6' : undefined)
+    const resolver = (id: string): { configName: string } | undefined => (id === 'Doubao-Seed-Code' ? { configName: 'Doubao_1_6' } : undefined)
     const result = await new TraeSoloBridge(upstream, catalog, resolver).chatStream(JSON.stringify({
       model: 'Doubao-Seed-Code', messages: [{ role: 'user', content: '1+1' }],
     }))

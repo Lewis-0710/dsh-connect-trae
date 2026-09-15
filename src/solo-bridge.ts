@@ -140,8 +140,19 @@ export function bridgeTraeSoloStream(response: Response, model: string): Respons
   return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
 }
 
-/** Resolves a display model id to the real llm_utils_chat config_name. */
-export type TraeWireResolver = (displayId: string) => string | undefined
+/**
+ * One resolved wire target: the `config_name` `llm_utils_chat` accepts, plus
+ * the directory function that listed it. Trae's roster is split across several
+ * SOLO-mode functions and a model is only callable through the one listing it
+ * (glm-5.3 answers only under `solo_work_remote`), so the chat call replays it.
+ */
+export interface TraeWireTarget {
+  configName: string
+  function?: string
+}
+
+/** Resolves a display model id to its wire target (config_name + function). */
+export type TraeWireResolver = (displayId: string) => TraeWireTarget | undefined
 
 /** Native SOLO client wrapper used by the loopback OpenAI adapter. */
 export class TraeSoloBridge implements TraeUpstreamClient {
@@ -167,12 +178,24 @@ export class TraeSoloBridge implements TraeUpstreamClient {
       // back to the startup wire resolver keyed by display name/id; the resolver
       // never depends on a user-refreshed or re-saved directory.
       const entry = this.catalog?.current().find(item => item.id === model)
-      const wireModel = entry?.wireConfigName
-        ?? this.wireResolver?.(model)
-        ?? this.wireResolver?.(entry?.name ?? '')
-        ?? model
+      // The catalog row carries both halves once discovery has run; the
+      // resolver covers ids that came from elsewhere (startup wire map).
+      const fromCatalog = entry?.wireConfigName === undefined
+        ? undefined
+        : { configName: entry.wireConfigName, ...entry.wireFunction === undefined ? {} : { function: entry.wireFunction } }
+      const fromResolver = this.wireResolver?.(model) ?? this.wireResolver?.(entry?.name ?? '')
+      const target = fromCatalog ?? fromResolver
+      const wireModel = target?.configName ?? model
+      const wireFunction = target?.function ?? entry?.wireFunction
       if (wireModel !== input['model']) {
         input['model'] = wireModel
+      }
+      // Stamp the directory function the model was discovered under, so the
+      // upstream is asked through the function that actually lists it.
+      if (wireFunction !== undefined && input['function'] !== wireFunction) {
+        input['function'] = wireFunction
+      }
+      if (wireModel !== JSON.parse(bodyJson)['model'] || wireFunction !== undefined) {
         prepared = JSON.stringify(input)
       }
       if (typeof input['reasoning_effort'] === 'string') {
