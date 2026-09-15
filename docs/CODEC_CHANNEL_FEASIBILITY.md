@@ -168,3 +168,41 @@ config。遍历 `function` 的 7 个候选值（`inline_chat` / `chat` / `agent`
 node scripts/probe-agent-task-body.mjs deepseek-v4.1-flash 14   # 绑定层解算（零额度）
 node scripts/probe-code-fields.mjs glm-5.3 12                   # 更早的必填字段还原
 ```
+
+---
+
+# 最终结论：三条 agent 路径的阻塞点与可行性判定（2026-09-16）
+
+## 三条路径的实测状态
+
+| 路径 | 实测结果 | 阻塞点 |
+|---|---|---|
+| `POST /api/agent/v3/create_agent_task` | 绑定层**完全通过**（HTTP 200 + SSE），请求体已完整解开 | 业务层 `4001 config item is empty for config opt` —— 需客户端注册的 config |
+| `POST /api/ide/v1/agents/runs` | 端点存在、鉴权通过（最小 body 与 GET 都返回同一业务错误） | **`5003 We're sorry, your agent running quota limit is exceeded.`** —— **账号级 agent 运行配额** |
+| 本地 Hub Bridge / Aha IPC（IDE 自身所用） | 确认存在（`1.10-main.sock`、私有 socket、51000 端口不答 HTTP） | 私有 IPC 协议，且**要求本机运行 Trae IDE** |
+
+## 判定
+
+**这三条都通向同一个事实：IDE 侧能力（含 deepseek-v4.1-flash / glm-5.3-flash /
+kimi-k2.8-preview）是「Trae 客户端专属」的，不对第三方 API 消费者开放。**
+
+- `create_agent_task` 需要**客户端先把 config 注册到服务端**（本地 `model_config_cache`
+  表 + Hub Bridge + `upsert-config` 链路），第三方无法凭空构造；
+- `agents/runs` 直接受**账号 agent 运行配额**约束（本机 CN 账号实测已超出）；
+- 本地 IPC 路线要求插件与 Trae IDE 同机运行，与「DSH 插件只读本机登录态」的形态冲突。
+
+因此：**在可预见的范围内，插件无法通过 agent 通道获得这些模型。** 这不是协议难度问题
+（协议我们已经解开），而是**授权与配额边界**问题。
+
+## 对项目的意义
+
+| 结论 | 说明 |
+|---|---|
+| SOLO 通道是 Trae 开放给 API 的通道 | `llm_utils_chat` 稳定可用，本插件已覆盖其全部 14 个模型（含 glm-5.3） |
+| IDE 侧模型不可得 | 除非上游把模型下放到 SOLO 目录，或官方开放 agent API |
+| 本轮的资产 | `create_agent_task` 的完整请求体结构、绑定层逐字段解算方法、三条路径的阻塞点证据——若未来官方开放 agent API，这些可直接复用 |
+
+## 交付建议
+
+维持 SOLO 通道（2.0.2 已把该通道的模型全部放出），把本轮调研与解算结果作为技术资产
+存档；不再为此投入实现工作量。
