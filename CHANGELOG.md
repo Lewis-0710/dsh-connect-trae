@@ -1,10 +1,32 @@
 # Changelog
 
-## 1.5.0 (unreleased)
+## 2.0.0 (unreleased)
 
-> **🆕 正式支持 Trae 国际版（www.trae.ai）**——国内版与国际版账号在本插件中获得完全对等的支持，**零配置、零开关，全自动**：
+### Breaking Changes
 
-- **怎么用**：在插件卡片的账号列表里选国际版账号（Trae / TRAE SOLO 国际版安装的登录）即等于切到国际版；选回国内账号即回到国内版。区域判定完全跟随凭证自带的 `userRegion` 声明（`SG` → 国际，`CN` → 国内，host 后缀与 edition 标签兜底），无需任何手动设置。
+- **为什么是 2.0.0**：本版在「国际版支持」之上完成架构级变更——插件由「单 provider 单活区域」变为「双 provider 并行」，运行形态与外部可见契约均有变化，按语义化版本升主版本号：
+  - **运行形态**：插件现在注册两个 provider 路由（`trae` + `trae-global`）并打开**两个**回环端口（原先各一个）。下游脚本若假定「只存在一个 trae provider」，需适配新增的 `trae-global`。
+  - **设置 schema 扩展**：新增 `accounts.{cn,ai}` 每区域账号选择。旧的单 `accountId` 仍被读取并按其账号实际区域自动归位（软迁移，非硬破坏）；`regions` 分槽结构不变。
+  - **CLI 不可见面**：卡片路由全部按 `?region=cn|ai` 参数化（未知区域 400）；这是 host↔卡片之间的私有契约，对用户透明。
+
+### Features
+
+- **🆕 国内版与国际版拆分为两个并行供应商，可同时使用**——此前一个 provider 一次只能活一个区域（选哪个账号整个 `trae` 就服务于哪个区域，切账号 = 翻转整个运行时目录）。现在两侧是两套完全独立的实例，**互不干扰**：
+
+  - **双 provider 注册**：国内版保持 `trae`（老 id 不变，存量会话的默认模型与已保存选择全部继续有效），国际版新增 `trae-global`（displayName `Trae Global`）。**两边模型同时出现在 DSH 模型选择器里**——不同会话 / 子代理可以各选一边，互不干扰。
+  - **每个区域一套完整运行时栈**：凭据 store、模型 catalog、wire 映射（display id/name → `llm_utils_chat` config_name）、Remote/SOLO 客户端、回环 shim、adapter 各一份。store 按凭据自带的区域声明过滤可见账号，两个区域的账号可同时在线。
+  - **插件卡片 tab 化**：设置卡片顶部新增「国内版 / 国际版」tab 栏（带各自登录状态圆点）。每个 tab 有独立的账号选择、用量/订阅概览与模型管理；**切 tab 不丢另一侧未保存的草稿**（模型勾选 / 图片开关 / 上下文预算的草稿按区域隔离保存）。
+  - **「减少刷新变化」**：一个 tab 里切账号、刷新模型、轮询用量，完全不触碰另一边的运行时目录——绑定另一边模型的进行中会话不受任何影响（单 provider 架构做不到这一点）。
+  - **账号选择按区域独立**：配置新增 `accounts.{cn,ai}`，每个 tab 各选各的账号。旧的单 `accountId` 在启动时按其实际所属区域归位（另一区域保持「首个发现账号」的默认，绝不静默继承错区域的选中账号）。
+  - **凭据刷新副本按区域分文件**：`$DSH_HOME/.trae-auth.cn.json` 与 `.trae-auth.ai.json`，双账号同时在线互不覆盖（此前单文件只存一个账号的刷新结果，后写者赢）；旧单文件 `.trae-auth.json` 作为迁移来源保留读取（只被其凭据所属的区域采纳），`logout` 清除全部。
+  - **身份解析按区域收窄**：机器/设备 identity 的候选安装先按区域过滤，国内栈不会去读国际安装的 identity（反之亦然），避免跨安装取错 deviceId/machineId。
+  - **Raw Chat 探测仅在国内栈**：探测模型 `qwen-3.7-plus` 仅国内可用，且该路径本就 `enabled: false`；国际栈固定报告 `disabled`，不再触碰 raw 端点。
+
+- **国际版支持（国内与国际账号对等）**——沿用本版已完成的区域化工作，**零配置、零开关**：
+
+  > **🆕 正式支持 Trae 国际版（www.trae.ai）**——国内版与国际版账号在本插件中获得完全对等的支持：
+
+- **怎么用**：在插件卡片对应区域的 tab 里选账号（Trae / TRAE SOLO 国际版安装的登录即国际版；Trae CN / TRAE SOLO CN 即国内版）。区域判定完全跟随凭证自带的 `userRegion` 声明（`SG` → 国际，`CN` → 国内，host 后缀与 edition 标签兜底），无需任何手动设置。
 - **国际账号可用的完整功能**（目录/网关/订阅状态均经 2026-09-15 实测取证，见 `docs/INTL_SG_EVIDENCE.md`）：
   - **模型接入**：聊天与目录请求自动走国际网关 `https://coresg-normal.trae.ai`；国际版 remote 目录（Gemini-3.1-Pro / Gemini-3-Flash / MiniMax-M3 / M2.7 / Kimi-K2.5 / GPT-5.4 / GPT-5.2）进入 DSH 模型选择器；CN 版解析器直通国际响应（`wireConfigName` 机制命中 `gemini-3.1-pro → custom_model_gemini`）。
   - **订阅状态**：国际账号无 Work 积分包（订阅制），卡片显示订阅/试用状态（`ide_user_pay_status`，官方 App 同款端点）。
@@ -13,7 +35,7 @@
 - **凭证层**：四个桌面版安装（Trae CN / Trae / TRAE SOLO CN / TRAE SOLO）全部纳入账号扫描；国际 CLI（`~/.trae`）因默认 host 未验证暂不支持（给出可诊断错误而非静默误路由）。
 - **refresh 契约按 edition 分叉**：TRAE SOLO 国际版走 `/trae/api/v3/oauth/ExchangeToken` + ClientID `en1oxy7wnw8j9n` + DeviceInfo（官方 App 日志直证）；其余三版维持 `/cloudide/api/v3/trae/oauth/ExchangeToken` + `ono9krqynydwx5`。
 - **端到端实测（2026-09-15）**：SOLO 国际版有效凭证经本项目正式代码路径（`prepareSoloBody` + `buildTraeHeaders` + `REGION_GATEWAYS.ai.chat`）发最小 `solo_work_lite` 请求：`gpt-5.4` 走 `coresg-normal.trae.ai` 返回 HTTP 200 + 完整 SSE（`output("OK")` / `usage` / `done`），`SseDecoder` 原样可用。账号扫描实测：`edition: auto` 下四版安装共发现 5 个账号（含 2 个国际版，region 正确标 `ai`）。
-- 测试：region 判定（userRegion 大小写不敏感/host 后缀/edition 三级兜底）、regionStateOf 迁移语义（扁平读作 cn、ai 绝不继承、显式槽优先）、fallback 目录区域隔离与实测快照、solo/remote/usage 的 ai 网关路由断言、refresh 四版契约断言、web-status 的 ai 分派与降级、nextRegionSlots 保存合并语义。208/208 全绿，对纯 CN 用户零行为变化。
+- 测试：region 判定（userRegion 大小写不敏感/host 后缀/edition 三级兜底）、regionStateOf 迁移语义（扁平读作 cn、ai 绝不继承、显式槽优先）、fallback 目录区域隔离与实测快照、solo/remote/usage 的 ai 网关路由断言、refresh 四版契约断言、web-status 的 ai 分派与降级、nextRegionSlots 保存合并语义。220/220 全绿（含双 provider 注册、跨区域隔离、区域路由分派、区域化 store 与旧副本迁移）。
 
 ## 1.4.2 (2026-09-14)
 
