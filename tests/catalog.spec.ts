@@ -26,11 +26,14 @@ const RAW = discoveredCatalog([{
 }])
 
 describe('Trae catalog', () => {
-  it('starts with identity-only fallback entries that default to text-only', () => {
+  it('starts with fallback entries that are text-only but sized', () => {
     const catalog = new TraeCatalog()
     expect(catalog.current()).toEqual(FALLBACK_TRAE_MODELS)
     expect(catalog.current().some(model => model.id === 'DeepSeek-V4-Flash-Official')).toBe(true)
-    expect(catalog.current().every(model => model.contextWindow === undefined)).toBe(true)
+    // A fallback row must state a real window: DSH fails the whole provider
+    // route for a model it cannot size (`INVALID_MODEL_CONTEXT`), which is
+    // issue #8 — the route was dead whenever no live directory was available.
+    expect(catalog.current().every(model => Number.isInteger(model.contextWindow) && model.contextWindow! > 0)).toBe(true)
     expect(traeInputModalities(FALLBACK_TRAE_MODELS.find(model => model.id === 'glm-5.2')!)).toEqual(['text'])
     expect(traeInputModalities(FALLBACK_TRAE_MODELS.find(model => model.id === 'kimi-k2.6')!)).toEqual(['text'])
     expect(traeInputModalities(FALLBACK_TRAE_MODELS.find(model => model.id === 'DeepSeek-V4-Pro-Official')!)).toEqual(['text'])
@@ -207,6 +210,42 @@ describe('region-scoped fallback directories', () => {
       'gemini-3.1-pro', 'gemini-3-flash-solo', 'minimax-m3', 'minimax-m2.7', 'kimi-k2.5', 'gpt-5.4', 'gpt-5.2',
     ])
     expect(FALLBACK_TRAE_MODELS_AI.every(model => model.input === undefined)).toBe(true)
+    // Measured windows from the same capture — a route with no live directory
+    // (no international install) is served straight from this list.
+    expect(Object.fromEntries(FALLBACK_TRAE_MODELS_AI.map(model => [model.id, model.contextWindow]))).toEqual({
+      'gemini-3.1-pro': 200_000,
+      'gemini-3-flash-solo': 200_000,
+      'minimax-m3': 200_000,
+      'minimax-m2.7': 200_000,
+      'kimi-k2.5': 200_000,
+      'gpt-5.4': 272_000,
+      'gpt-5.2': 272_000,
+    })
+  })
+})
+
+describe('every served model is sized for DSH', () => {
+  // Regression for issue #8: a model whose context window DSH cannot accept
+  // fails the ENTIRE provider route (`adapter returned invalid context metadata`,
+  // INVALID_MODEL_CONTEXT), so an unsized fallback row does not degrade one
+  // model — it takes a whole region offline. That is what happened for users
+  // with no international install: `trae-global` is served from the AI fallback.
+  it('sizes every fallback row in both regions with a positive integer', () => {
+    for (const region of ['cn', 'ai'] as const) {
+      for (const model of fallbackModelsFor(region)) {
+        expect(Number.isInteger(model.contextWindow), `${region}/${model.id} needs an integer contextWindow`).toBe(true)
+        expect(model.contextWindow!, `${region}/${model.id} needs contextWindow > 0`).toBeGreaterThan(0)
+      }
+    }
+  })
+
+  it('sizes every discovered row that reaches the catalog', () => {
+    // Live rows carry their window from the directory; a row that somehow
+    // arrives unsized must still not be able to reach the adapter unsized.
+    const rows = discoveredCatalog([{ id: 'x', name: 'X', multimodal: false, reasoningSupported: false }])
+    expect(rows[0]?.contextWindow).toBeUndefined()
+    // The adapter supplies `defaultContextWindow` for exactly this case, so the
+    // catalog is allowed to omit it here — but never for the fallbacks above.
   })
 })
 

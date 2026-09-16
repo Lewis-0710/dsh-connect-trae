@@ -41,12 +41,20 @@ export interface TraeModelInfo {
  * `DeepSeek-V4-Pro-Official` carry the `-Official` suffix, and there is no
  * `auto` config_name — an `auto` row was previously served here and would have
  * failed on selection.
+ *
+ * Every row MUST also carry a positive-integer `contextWindow`. DSH rejects an
+ * adapter whose model has no usable context (`INVALID_MODEL_CONTEXT`), and that
+ * failure is per-provider — one bad row takes the whole region offline. These
+ * rows are exactly the ones served when no live directory is available (no
+ * install for that region, signed out, or a failed refresh), which is precisely
+ * when the fallback is doing its job, so a missing field here is fatal rather
+ * than cosmetic. See docs/ISSUE8_DIAGNOSIS.md.
  */
 export const FALLBACK_TRAE_MODELS: readonly TraeModelInfo[] = [
-  { id: 'DeepSeek-V4-Flash-Official', name: 'DeepSeek-V4-Flash' },
-  { id: 'DeepSeek-V4-Pro-Official', name: 'DeepSeek-V4-Pro' },
-  { id: 'glm-5.2', name: 'GLM-5.2' },
-  { id: 'kimi-k2.6', name: 'Kimi-K2.6' },
+  { id: 'DeepSeek-V4-Flash-Official', name: 'DeepSeek-V4-Flash', contextWindow: 200_000 },
+  { id: 'DeepSeek-V4-Pro-Official', name: 'DeepSeek-V4-Pro', contextWindow: 200_000 },
+  { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 200_000 },
+  { id: 'kimi-k2.6', name: 'Kimi-K2.6', contextWindow: 200_000 },
 ]
 
 /**
@@ -56,15 +64,19 @@ export const FALLBACK_TRAE_MODELS: readonly TraeModelInfo[] = [
  * has no Gemini/GPT/MiniMax entries), so an international account must never
  * be seeded with the CN list. Like the CN fallback it is replaced by the live
  * refresh; image input stays the user's explicit opt-in (`imageModelIds`).
+ *
+ * The `contextWindow` values are the measured ones from that same capture
+ * (`docs/INTL_SG_EVIDENCE.md` §3) and are required for the same reason as the
+ * CN fallback: without them the whole `trae-global` provider fails to load.
  */
 export const FALLBACK_TRAE_MODELS_AI: readonly TraeModelInfo[] = [
-  { id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview' },
-  { id: 'gemini-3-flash-solo', name: 'Gemini-3-Flash-Preview' },
-  { id: 'minimax-m3', name: 'MiniMax-M3' },
-  { id: 'minimax-m2.7', name: 'MiniMax-M2.7' },
-  { id: 'kimi-k2.5', name: 'Kimi-K2.5' },
-  { id: 'gpt-5.4', name: 'GPT-5.4' },
-  { id: 'gpt-5.2', name: 'GPT-5.2' },
+  { id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview', contextWindow: 200_000 },
+  { id: 'gemini-3-flash-solo', name: 'Gemini-3-Flash-Preview', contextWindow: 200_000 },
+  { id: 'minimax-m3', name: 'MiniMax-M3', contextWindow: 200_000 },
+  { id: 'minimax-m2.7', name: 'MiniMax-M2.7', contextWindow: 200_000 },
+  { id: 'kimi-k2.5', name: 'Kimi-K2.5', contextWindow: 200_000 },
+  { id: 'gpt-5.4', name: 'GPT-5.4', contextWindow: 272_000 },
+  { id: 'gpt-5.2', name: 'GPT-5.2', contextWindow: 272_000 },
 ]
 
 /**

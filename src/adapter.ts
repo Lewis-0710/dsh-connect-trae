@@ -60,6 +60,14 @@ const REQUEST_IMAGE_BUDGETS = {
   requestImageMaxBytes: 1_048_576,
 } as const
 
+/**
+ * Conservative context capacity used only when a served model row carries no
+ * window of its own. Every fallback row and every live Trae row is expected to
+ * state its real window; this is the backstop that keeps one unsized row from
+ * failing the entire provider route (`INVALID_MODEL_CONTEXT`).
+ */
+const FALLBACK_CONTEXT_WINDOW = 200_000
+
 function toPiModel(info: TraeModelInfo, baseUrl: string, providerId: string): Model<Api> {
   return {
     id: info.id,
@@ -141,6 +149,14 @@ export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
     // serviceable. `piProvider` also became optional in 0.1.5, which this
     // hand-built profile still satisfies by always supplying it.
     modelErrors: new Map(),
+    // Last-resort context capacity for any model row this route serves without
+    // its own `contextWindow`. DSH rejects a model whose resolved window is not
+    // a positive integer, and that rejection fails the WHOLE provider route, so
+    // one unsized row would take an entire region offline (docs/ISSUE8_DIAGNOSIS.md).
+    // Both fallback catalogs and live Trae rows now carry a real window, so this
+    // value should never be consulted; it exists so that a future unsized row
+    // degrades to one conservative model instead of a dead region.
+    defaultContextWindow: FALLBACK_CONTEXT_WINDOW,
     ...REQUEST_IMAGE_BUDGETS,
     piProvider: provider,
   }
