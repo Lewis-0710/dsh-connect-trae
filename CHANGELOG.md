@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.4 (2026-09-16)
+
+### Fixes
+
+- **修复「某个区域没有实时模型目录时，该区域的 provider 整个加载失败」**（issue #8：未安装国际版的用户看到 `Trae Global 加载失败：adapter returned invalid context metadata for provider "trae-global" model "gemini-3.1-pro"`）：
+  - **根因**：两个区域的内置兜底目录里，每个模型都缺少 `contextWindow`。DSH 要求它必须是正整数（`INVALID_MODEL_CONTEXT`），而 `dsh-llm-pi-ai` 的回退链是 `entry.contextWindow → 已安装 catalog → request.defaultContextWindow`——本插件既没传 `defaultContextWindow`，兜底模型也不在已安装 catalog 里，三条全空，于是校验失败。
+  - **失败粒度是 provider 级**：不是丢单个模型，而是**整个区域不可用**。触发场景包括未安装该区客户端、未登录、目录拉取失败（该端点有已知的间歇性 401）、以及首次安装尚未刷新过目录。因此这不是「没装国际版拖累国内版」，而是**两个区域各自独立地有这个缺陷**。
+  - **修复**：(1) 兜底目录补上实测 `contextWindow`——国际版依据 2026-09-15 实测目录（`gemini-3.1-pro`/`gemini-3-flash-solo`/`minimax-m3`/`minimax-m2.7`/`kimi-k2.5` = 200000，`gpt-5.4`/`gpt-5.2` = 272000），国内版依据 SOLO 通道实测（200000）；(2) adapter 传 `defaultContextWindow` 作为最终防线，将来任何来源的条目不慎缺字段时降级为「一个保守尺寸的模型」而非「整区不可用」。
+  - 新增不变量测试：**两个区域的兜底行都必须带正整数 `contextWindow`**。原先有一条测试断言「兜底条目没有 `contextWindow`」——它固化的正是这个 bug，已改正。
+
 ## 2.0.3 (2026-09-16)
 
 ### Fixes
