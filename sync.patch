@@ -55,7 +55,7 @@ index 0d9195b..e17dcf9 100644
      .map(info => toPiModel(info, `${options.shim.baseUrl()}/v1`, providerId))
  
 diff --git a/src/catalog.ts b/src/catalog.ts
-index ef7449f..1b19386 100644
+index ef7449f..020d5f6 100644
 --- a/src/catalog.ts
 +++ b/src/catalog.ts
 @@ -17,6 +17,7 @@ export interface TraeModelInfo {
@@ -84,9 +84,8 @@ index ef7449f..1b19386 100644
 -    : `${model.name} · x${model.creditMultiplier.toFixed(2)}`
 +export function isMembershipModel(model: Pick<TraeModelInfo, 'id' | 'name' | 'requiresMembership'>): boolean {
 +  return model.requiresMembership === true
- }
- 
--/** Apply the user's explicit image opt-ins; upstream and saved row hints are ignored. */
++}
++
 +/** Format the injected model alias (display name) including membership badge and credit multiplier. */
 +export function formatTraeModelDisplayName(
 +  model: Pick<TraeModelInfo, 'id' | 'name' | 'creditMultiplier' | 'requiresMembership'>,
@@ -99,8 +98,9 @@ index ef7449f..1b19386 100644
 +    parts.push(`(${Number(model.creditMultiplier.toFixed(2))}x)`)
 +  }
 +  return parts.join(' ')
-+}
-+
+ }
+ 
+-/** Apply the user's explicit image opt-ins; upstream and saved row hints are ignored. */
 +/** Apply the user's explicit image opt-ins; if selected is empty/undefined, preserves native image capability. */
  export function applyImageSelection(
    models: readonly TraeModelInfo[],
@@ -113,18 +113,31 @@ index ef7449f..1b19386 100644
    return models.map(model => ({ ...model, input: selected.has(model.id) ? ['text', 'image'] : ['text'] }))
  }
  
-@@ -173,8 +181,8 @@ export function mergeTraeModelSources(
+@@ -170,26 +178,36 @@ export function mergeTraeModelSources(
+     wireByName.set(displayKey(model.name), model)
+     wireById.set(displayKey(model.id), model)
+   }
++  const seenIds = new Set<string>()
++  const seenNames = new Set<string>()
    const result: TraeModelInfo[] = []
    for (const model of remote) {
-     const wireModel = wireById.get(displayKey(model.id)) ?? wireByName.get(displayKey(model.name))
+-    const wireModel = wireById.get(displayKey(model.id)) ?? wireByName.get(displayKey(model.name))
 -    // No config_name maps to this display id → uncallable via llm_utils_chat.
 -    // Drop it rather than advertise a model that always fails with 4001.
++    const idKey = displayKey(model.id)
++    const nameKey = displayKey(model.name)
++    if (seenIds.has(idKey) || seenNames.has(nameKey)) continue
++
++    const wireModel = wireById.get(idKey) ?? wireByName.get(nameKey)
 +    // No config_name maps to this display id → uncallable via llm_utils_chat (e.g. IDE-only flash/preview models).
 +    // Drop it rather than advertise a model that always fails with 4001 "param is invalid".
      if (wireModel === undefined) continue
++
++    seenIds.add(idKey)
++    seenNames.add(nameKey)
      result.push({
        id: model.id,
-@@ -182,14 +190,15 @@ export function mergeTraeModelSources(
+       name: model.name,
        ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
        ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
        ...model.creditMultiplier === undefined ? {} : { creditMultiplier: model.creditMultiplier },
@@ -143,7 +156,7 @@ index ef7449f..1b19386 100644
      })
    }
    return result
-@@ -199,23 +208,25 @@ export function mergeTraeModelSources(
+@@ -199,23 +217,25 @@ export function mergeTraeModelSources(
  export type TraeContextBudget = number
  
  /**
@@ -179,7 +192,7 @@ index ef7449f..1b19386 100644
  export function discoveredCatalog(models: readonly TraeDiscoveredModel[]): TraeModelInfo[] {
    const result: TraeModelInfo[] = []
    for (const model of models) {
-@@ -224,7 +235,8 @@ export function discoveredCatalog(models: readonly TraeDiscoveredModel[]): TraeM
+@@ -224,7 +244,8 @@ export function discoveredCatalog(models: readonly TraeDiscoveredModel[]): TraeM
        name: model.name,
        ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
        ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
@@ -189,7 +202,7 @@ index ef7449f..1b19386 100644
        ...model.creditMultiplier === undefined ? {} : { creditMultiplier: model.creditMultiplier },
        reasoningSupported: model.reasoningSupported,
        ...model.reasoning === undefined ? {} : {
-@@ -248,21 +260,30 @@ export function sanitizeCatalog(catalog: readonly TraeModelInfo[]): TraeModelInf
+@@ -248,21 +269,30 @@ export function sanitizeCatalog(catalog: readonly TraeModelInfo[]): TraeModelInf
    })
  }
  
@@ -720,7 +733,7 @@ index df8645d..5ac5c4a 100644
            ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
            // Current dsh-llm discovery types do not yet declare this field, but
 diff --git a/src/model-cache.ts b/src/model-cache.ts
-index 1f7a4b4..33811c1 100644
+index 1f7a4b4..1cefca9 100644
 --- a/src/model-cache.ts
 +++ b/src/model-cache.ts
 @@ -2,6 +2,9 @@ import { execFile } from 'node:child_process'
@@ -742,7 +755,7 @@ index 1f7a4b4..33811c1 100644
  export async function readTraeCachedModel(
    functionName: string,
    modelName: string,
-@@ -78,3 +83,58 @@ export async function readTraeCachedModel(
+@@ -78,3 +83,63 @@ export async function readTraeCachedModel(
    const list = Array.isArray(document[functionName]) ? document[functionName] as unknown[] : []
    return parseTraeCachedModel(list.find(item => typeof item === 'object' && item !== null && (item as { name?: unknown }).name === modelName))
  }
@@ -778,7 +791,8 @@ index 1f7a4b4..33811c1 100644
 +      if (!stdout.trim()) continue
 +      const document = JSON.parse(stdout) as Record<string, unknown>
 +      const candidateKeys = ['solo_agent', 'chat_v3', 'builder_v3', 'builder', 'code_review_summary']
-+      const seen = new Set<string>()
++      const seenIds = new Set<string>()
++      const seenNames = new Set<string>()
 +      const models: TraeDiscoveredModel[] = []
 +      for (const key of candidateKeys) {
 +        const list = Array.isArray(document[key]) ? document[key] as unknown[] : []
@@ -789,8 +803,12 @@ index 1f7a4b4..33811c1 100644
 +            continue
 +          }
 +          const model = parseTraeRemoteModel(raw)
-+          if (model === undefined || seen.has(model.id)) continue
-+          seen.add(model.id)
++          if (model === undefined) continue
++          const idKey = model.id.trim().toLowerCase()
++          const nameKey = model.name.trim().toLowerCase()
++          if (seenIds.has(idKey) || seenNames.has(nameKey)) continue
++          seenIds.add(idKey)
++          seenNames.add(nameKey)
 +          models.push(model)
 +        }
 +      }
@@ -802,7 +820,7 @@ index 1f7a4b4..33811c1 100644
 +  return []
 +}
 diff --git a/src/model-metadata.ts b/src/model-metadata.ts
-index 7915b5e..54f7d07 100644
+index 7915b5e..ae25ff2 100644
 --- a/src/model-metadata.ts
 +++ b/src/model-metadata.ts
 @@ -14,6 +14,7 @@ export interface TraeDiscoveredModel {
@@ -813,7 +831,16 @@ index 7915b5e..54f7d07 100644
    contextWindow?: number
    maxContextWindow?: number
    creditMultiplier?: number
-@@ -42,6 +43,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
+@@ -27,6 +28,8 @@ interface RawTraeRemoteModel {
+   multimodal?: unknown
+   max_mode?: unknown
+   context_window_tokens?: unknown
++  context_window_size?: unknown
++  prompt_max_tokens?: unknown
+   reasoning_effort_config?: unknown
+   features?: unknown
+ }
+@@ -42,6 +45,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
  }
  
  function parseFeatures(value: unknown): Record<string, unknown> | undefined {
@@ -821,10 +848,40 @@ index 7915b5e..54f7d07 100644
    if (typeof value !== 'string' || value === '') return undefined
    try { return record(JSON.parse(value) as unknown) } catch { return undefined }
  }
-@@ -60,11 +62,22 @@ export function parseTraeRemoteModel(value: unknown): TraeDiscoveredModel | unde
-   const dev = finitePositive(context?.['dev'])
-   const max = raw.max_mode === true ? finitePositive(context?.['max']) : undefined
+@@ -57,14 +61,50 @@ export function parseTraeRemoteModel(value: unknown): TraeDiscoveredModel | unde
+   const raw = record(value) as RawTraeRemoteModel | undefined
+   if (raw === undefined || typeof raw.name !== 'string' || raw.name === '') return undefined
+   const context = record(raw.context_window_tokens)
+-  const dev = finitePositive(context?.['dev'])
+-  const max = raw.max_mode === true ? finitePositive(context?.['max']) : undefined
    const features = parseFeatures(raw.features)
++  const contextWindowsFeature = record(features?.['context_windows'])
++  const contextWindowsData = record(contextWindowsFeature?.['data'])
++  const contextWindowSize = record(raw.context_window_size)
++
++  const dev = finitePositive(context?.['dev'])
++    ?? finitePositive(contextWindowsData?.['dev_context'])
++    ?? finitePositive(contextWindowSize?.['default'])
++    ?? finitePositive(raw.prompt_max_tokens)
++
++  const maxFromList = Array.isArray(contextWindowsData?.['max_context_list'])
++    ? finitePositive(contextWindowsData['max_context_list'][0])
++    : undefined
++  const maxFromSizeList = Array.isArray(contextWindowSize?.['max'])
++    ? finitePositive(contextWindowSize['max'][0])
++    : undefined
++
++  const maxVal = finitePositive(context?.['max'])
++    ?? finitePositive(contextWindowsData?.['max_context'])
++    ?? maxFromList
++    ?? finitePositive(contextWindowSize?.['max'])
++    ?? maxFromSizeList
++
++  const max = (raw.max_mode === true || contextWindowsFeature?.['enable'] === true || maxVal !== undefined)
++    && maxVal !== undefined && maxVal > (dev ?? 0)
++    ? maxVal
++    : undefined
++
 +  const activityDiscount = record(features?.['activity_discount'])
 +  const activityData = record(activityDiscount?.['data'])
 +  const currentDiscount = record(activityData?.['current'])
@@ -845,7 +902,7 @@ index 7915b5e..54f7d07 100644
    const reasoningConfig = record(raw.reasoning_effort_config)
    const rawOptions = Array.isArray(reasoningConfig?.['options']) ? reasoningConfig['options'] : []
    const supported = rawOptions.flatMap(option => {
-@@ -78,7 +91,8 @@ export function parseTraeRemoteModel(value: unknown): TraeDiscoveredModel | unde
+@@ -78,7 +118,8 @@ export function parseTraeRemoteModel(value: unknown): TraeDiscoveredModel | unde
    return {
      id: raw.name,
      name: typeof raw.display_name === 'string' && raw.display_name !== '' ? raw.display_name : raw.name,
@@ -917,6 +974,31 @@ index 2942bba..480c0c4 100644
        if (typeof input['reasoning_effort'] === 'string') {
          const info = entry
          const efforts = info?.reasoningEfforts
+diff --git a/src/solo-remote.ts b/src/solo-remote.ts
+index 05be410..66f83fa 100644
+--- a/src/solo-remote.ts
++++ b/src/solo-remote.ts
+@@ -64,12 +64,17 @@ export class TraeSoloRemoteCatalogClient {
+     const json = await response.json() as { code?: number; data?: { list?: { function?: string; models?: unknown[] }[] } }
+     const groups = json.data?.list ?? []
+     const preferred = groups.find(group => group.function === 'solo_agent_remote') ?? groups[0]
+-    const seen = new Set<string>()
++    const seenIds = new Set<string>()
++    const seenNames = new Set<string>()
+     const models: TraeDiscoveredModel[] = []
+     for (const raw of preferred?.models ?? []) {
+       const model = parseTraeRemoteModel(raw)
+-      if (model === undefined || seen.has(model.id)) continue
+-      seen.add(model.id)
++      if (model === undefined) continue
++      const idKey = model.id.trim().toLowerCase()
++      const nameKey = model.name.trim().toLowerCase()
++      if (seenIds.has(idKey) || seenNames.has(nameKey)) continue
++      seenIds.add(idKey)
++      seenNames.add(nameKey)
+       models.push(model)
+     }
+     if (models.length === 0) throw new Error('SOLO remote models response contained no models')
 diff --git a/src/solo.ts b/src/solo.ts
 index 43fcbb1..6f7ee67 100644
 --- a/src/solo.ts
@@ -955,7 +1037,7 @@ index 67571f9..c315e33 100644
    reasoning?: {
      supported: string[]
 diff --git a/tests/catalog.spec.ts b/tests/catalog.spec.ts
-index a4d46a3..d73dd46 100644
+index a4d46a3..887554a 100644
 --- a/tests/catalog.spec.ts
 +++ b/tests/catalog.spec.ts
 @@ -8,11 +8,12 @@ import {
@@ -1090,7 +1172,30 @@ index a4d46a3..d73dd46 100644
      const remote: TraeDiscoveredModel[] = [
        { id: 'Doubao-Seed-Code', name: 'Seed-Code', multimodal: true, reasoningSupported: true },
        { id: 'glm-5.3', name: 'GLM-5.3', multimodal: false, reasoningSupported: false },
-@@ -266,7 +269,7 @@ describe('only callable models are ever served', () => {
+@@ -188,6 +191,22 @@ describe('mergeTraeModelSources', () => {
+     const merged = mergeTraeModelSources(remote, wire)
+     expect(merged.map(model => model.id)).toEqual(['glm-5.2'])
+   })
++
++  it('deduplicates remote models by id and display name preserving the first match', () => {
++    const remote: TraeDiscoveredModel[] = [
++      { id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview', multimodal: true, reasoningSupported: true },
++      { id: 'gemini-3-flash-solo', name: 'Gemini-3-Flash-Preview', multimodal: true, reasoningSupported: true },
++      { id: 'gemini-3-flash-premium', name: 'Gemini-3-Flash-Preview', multimodal: true, reasoningSupported: true },
++      { id: 'gemini-3-pro', name: 'Gemini-3.1-Pro-Preview', multimodal: true, reasoningSupported: true },
++    ]
++    const wire = [
++      { id: 'custom_model_gemini', name: 'Gemini-3.1-Pro-Preview' },
++      { id: 'custom_model_gemini_flash', name: 'Gemini-3-Flash-Preview' },
++    ]
++    const merged = mergeTraeModelSources(remote, wire)
++    expect(merged.map(model => model.id)).toEqual(['gemini-3.1-pro', 'gemini-3-flash-solo'])
++    expect(merged.map(model => model.name)).toEqual(['Gemini-3.1-Pro-Preview', 'Gemini-3-Flash-Preview'])
++  })
+ })
+ 
+ describe('region-scoped fallback directories', () => {
+@@ -266,7 +285,7 @@ describe('only callable models are ever served', () => {
      const remote = [
        { id: 'glm-5.2', name: 'GLM-5.2', multimodal: false, reasoningSupported: false },
        // Advertised by the remote directory but absent from the wire roster:
@@ -1100,7 +1205,7 @@ index a4d46a3..d73dd46 100644
      ]
      const merged = mergeTraeModelSources(remote, [{ id: 'glm-5.2', name: 'GLM-5.2' }])
 diff --git a/tests/model-cache.spec.ts b/tests/model-cache.spec.ts
-index ed825aa..d6e597e 100644
+index ed825aa..854328d 100644
 --- a/tests/model-cache.spec.ts
 +++ b/tests/model-cache.spec.ts
 @@ -1,5 +1,5 @@
@@ -1110,7 +1215,7 @@ index ed825aa..d6e597e 100644
  
  describe('Trae cached model config', () => {
    it('keeps only safe prompt/model fields and parses custom_config', () => {
-@@ -19,4 +19,9 @@ describe('Trae cached model config', () => {
+@@ -19,4 +19,45 @@ describe('Trae cached model config', () => {
      expect(parseTraeCachedModel({ name: 'm', custom_config: '{bad', max_tokens: 0 })).toEqual({ name: 'm' })
      expect(parseTraeCachedModel({})).toBeUndefined()
    })
@@ -1119,12 +1224,48 @@ index ed825aa..d6e597e 100644
 +    const result = await readTraeLocalCatalog('cn', 'nonexistent-user', { home: '/nonexistent/path' })
 +    expect(result).toEqual([])
 +  })
++
++  it('deduplicates models by id and display name across candidate keys', async () => {
++    const { mkdtempSync, mkdirSync, rmSync } = await import('node:fs')
++    const { tmpdir } = await import('node:os')
++    const { join } = await import('node:path')
++    const { execFileSync } = await import('node:child_process')
++
++    const tempDir = mkdtempSync(join(tmpdir(), 'trae-test-'))
++    try {
++      const folder = join(tempDir, 'Library', 'Application Support', 'Trae', 'User', 'globalStorage')
++      mkdirSync(folder, { recursive: true })
++      const dbPath = join(folder, 'state.vscdb')
++      const doc = {
++        solo_agent: [
++          { name: 'gemini-3.1-pro', display_name: 'Gemini-3.1-Pro-Preview', features: { context_windows: { enable: true, data: { dev_context: 200000, max_context: 1000000 } } } },
++          { name: 'gemini-3-flash-solo', display_name: 'Gemini-3-Flash-Preview', features: { context_windows: { enable: true, data: { dev_context: 200000, max_context: 1000000 } } } },
++        ],
++        chat_v3: [
++          { name: 'gemini-3-flash-premium', display_name: 'Gemini-3-Flash-Preview', features: { context_windows: { enable: true, data: { dev_context: 200000, max_context: 1000000 } } } },
++          { name: 'deepseek-v3.2', display_name: 'DeepSeek-V3.2', features: { context_windows: { enable: true, data: { dev_context: 128000 } } } },
++        ],
++        code_review_summary: [
++          { name: 'gemini-3-pro', display_name: 'Gemini-3.1-Pro-Preview', features: { context_windows: { enable: true, data: { dev_context: 200000, max_context: 1000000 } } } },
++        ],
++      }
++      const val = JSON.stringify(doc).replace(/'/g, "''")
++      execFileSync('sqlite3', [dbPath, `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT); INSERT INTO ItemTable VALUES ('test_user_AI.agent.model.model_list_map', '${val}');`])
++
++      const result = await readTraeLocalCatalog('ai', 'test_user', { home: tempDir, platform: 'darwin' })
++      expect(result.map(model => model.id)).toEqual(['gemini-3.1-pro', 'gemini-3-flash-solo', 'deepseek-v3.2'])
++      expect(result.map(model => model.name)).toEqual(['Gemini-3.1-Pro-Preview', 'Gemini-3-Flash-Preview', 'DeepSeek-V3.2'])
++      expect(result[0]).toMatchObject({ contextWindow: 200000, maxContextWindow: 1000000 })
++    } finally {
++      rmSync(tempDir, { recursive: true, force: true })
++    }
++  })
  })
 diff --git a/tests/model-metadata.spec.ts b/tests/model-metadata.spec.ts
-index 814f54c..e41310f 100644
+index 814f54c..70f1f4d 100644
 --- a/tests/model-metadata.spec.ts
 +++ b/tests/model-metadata.spec.ts
-@@ -36,4 +36,53 @@ describe('Trae remote model metadata', () => {
+@@ -36,4 +36,79 @@ describe('Trae remote model metadata', () => {
        id: 'm', name: 'm', multimodal: false, reasoningSupported: false,
      })
    })
@@ -1175,6 +1316,32 @@ index 814f54c..e41310f 100644
 +    })).toEqual(expect.objectContaining({
 +      id: 'Doubao-Seed-Evolving',
 +      creditMultiplier: 0.08,
++    }))
++  })
++
++  it('parses context window and max context from state.vscdb features and context_window_size', () => {
++    expect(parseTraeRemoteModel({
++      name: 'gemini-3.1-pro',
++      display_name: 'Gemini-3.1-Pro-Preview',
++      prompt_max_tokens: 168000,
++      context_window_size: { max: [1000000], default: 200000 },
++      features: {
++        context_windows: {
++          enable: true,
++          data: {
++            dev_context: 200000,
++            max_context: 1000000,
++            max_context_list: [1000000],
++            dev_turns: 200,
++            max_turns: 500,
++          },
++        },
++      },
++    })).toEqual(expect.objectContaining({
++      id: 'gemini-3.1-pro',
++      name: 'Gemini-3.1-Pro-Preview',
++      contextWindow: 200000,
++      maxContextWindow: 1000000,
 +    }))
 +  })
  })
