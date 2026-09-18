@@ -28,6 +28,8 @@ interface RawTraeRemoteModel {
   multimodal?: unknown
   max_mode?: unknown
   context_window_tokens?: unknown
+  context_window_size?: unknown
+  prompt_max_tokens?: unknown
   reasoning_effort_config?: unknown
   features?: unknown
 }
@@ -59,9 +61,34 @@ export function parseTraeRemoteModel(value: unknown): TraeDiscoveredModel | unde
   const raw = record(value) as RawTraeRemoteModel | undefined
   if (raw === undefined || typeof raw.name !== 'string' || raw.name === '') return undefined
   const context = record(raw.context_window_tokens)
-  const dev = finitePositive(context?.['dev'])
-  const max = raw.max_mode === true ? finitePositive(context?.['max']) : undefined
   const features = parseFeatures(raw.features)
+  const contextWindowsFeature = record(features?.['context_windows'])
+  const contextWindowsData = record(contextWindowsFeature?.['data'])
+  const contextWindowSize = record(raw.context_window_size)
+
+  const dev = finitePositive(context?.['dev'])
+    ?? finitePositive(contextWindowsData?.['dev_context'])
+    ?? finitePositive(contextWindowSize?.['default'])
+    ?? finitePositive(raw.prompt_max_tokens)
+
+  const maxFromList = Array.isArray(contextWindowsData?.['max_context_list'])
+    ? finitePositive(contextWindowsData['max_context_list'][0])
+    : undefined
+  const maxFromSizeList = Array.isArray(contextWindowSize?.['max'])
+    ? finitePositive(contextWindowSize['max'][0])
+    : undefined
+
+  const maxVal = finitePositive(context?.['max'])
+    ?? finitePositive(contextWindowsData?.['max_context'])
+    ?? maxFromList
+    ?? finitePositive(contextWindowSize?.['max'])
+    ?? maxFromSizeList
+
+  const max = (raw.max_mode === true || contextWindowsFeature?.['enable'] === true || maxVal !== undefined)
+    && maxVal !== undefined && maxVal > (dev ?? 0)
+    ? maxVal
+    : undefined
+
   const activityDiscount = record(features?.['activity_discount'])
   const activityData = record(activityDiscount?.['data'])
   const currentDiscount = record(activityData?.['current'])

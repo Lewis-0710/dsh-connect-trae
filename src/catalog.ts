@@ -178,12 +178,21 @@ export function mergeTraeModelSources(
     wireByName.set(displayKey(model.name), model)
     wireById.set(displayKey(model.id), model)
   }
+  const seenIds = new Set<string>()
+  const seenNames = new Set<string>()
   const result: TraeModelInfo[] = []
   for (const model of remote) {
-    const wireModel = wireById.get(displayKey(model.id)) ?? wireByName.get(displayKey(model.name))
+    const idKey = displayKey(model.id)
+    const nameKey = displayKey(model.name)
+    if (seenIds.has(idKey) || seenNames.has(nameKey)) continue
+
+    const wireModel = wireById.get(idKey) ?? wireByName.get(nameKey)
     // No config_name maps to this display id → uncallable via llm_utils_chat (e.g. IDE-only flash/preview models).
     // Drop it rather than advertise a model that always fails with 4001 "param is invalid".
     if (wireModel === undefined) continue
+
+    seenIds.add(idKey)
+    seenNames.add(nameKey)
     result.push({
       id: model.id,
       name: model.name,

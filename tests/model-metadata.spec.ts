@@ -85,4 +85,30 @@ describe('Trae remote model metadata', () => {
       creditMultiplier: 0.08,
     }))
   })
+
+  it('parses context window and max context from state.vscdb features and context_window_size', () => {
+    expect(parseTraeRemoteModel({
+      name: 'gemini-3.1-pro',
+      display_name: 'Gemini-3.1-Pro-Preview',
+      prompt_max_tokens: 168000,
+      context_window_size: { max: [1000000], default: 200000 },
+      features: {
+        context_windows: {
+          enable: true,
+          data: {
+            dev_context: 200000,
+            max_context: 1000000,
+            max_context_list: [1000000],
+            dev_turns: 200,
+            max_turns: 500,
+          },
+        },
+      },
+    })).toEqual(expect.objectContaining({
+      id: 'gemini-3.1-pro',
+      name: 'Gemini-3.1-Pro-Preview',
+      contextWindow: 200000,
+      maxContextWindow: 1000000,
+    }))
+  })
 })

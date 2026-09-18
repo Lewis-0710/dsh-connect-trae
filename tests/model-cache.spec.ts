@@ -24,4 +24,40 @@ describe('Trae cached model config', () => {
     const result = await readTraeLocalCatalog('cn', 'nonexistent-user', { home: '/nonexistent/path' })
     expect(result).toEqual([])
   })
+
+  it('deduplicates models by id and display name across candidate keys', async () => {
+    const { mkdtempSync, mkdirSync, rmSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const { execFileSync } = await import('node:child_process')
+
+    const tempDir = mkdtempSync(join(tmpdir(), 'trae-test-'))
+    try {
+      const folder = join(tempDir, 'Library', 'Application Support', 'Trae', 'User', 'globalStorage')
+      mkdirSync(folder, { recursive: true })
+      const dbPath = join(folder, 'state.vscdb')
+      const doc = {
+        solo_agent: [
+          { name: 'gemini-3.1-pro', display_name: 'Gemini-3.1-Pro-Preview', features: { context_windows: { enable: true, data: { dev_context: 200000, max_context: 1000000 } } } },
+          { name: 'gemini-3-flash-solo', display_name: 'Gemini-3-Flash-Preview', features: { context_windows: { enable: true, data: { dev_context: 200000, max_context: 1000000 } } } },
+        ],
+        chat_v3: [
+          { name: 'gemini-3-flash-premium', display_name: 'Gemini-3-Flash-Preview', features: { context_windows: { enable: true, data: { dev_context: 200000, max_context: 1000000 } } } },
+          { name: 'deepseek-v3.2', display_name: 'DeepSeek-V3.2', features: { context_windows: { enable: true, data: { dev_context: 128000 } } } },
+        ],
+        code_review_summary: [
+          { name: 'gemini-3-pro', display_name: 'Gemini-3.1-Pro-Preview', features: { context_windows: { enable: true, data: { dev_context: 200000, max_context: 1000000 } } } },
+        ],
+      }
+      const val = JSON.stringify(doc).replace(/'/g, "''")
+      execFileSync('sqlite3', [dbPath, `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT); INSERT INTO ItemTable VALUES ('test_user_AI.agent.model.model_list_map', '${val}');`])
+
+      const result = await readTraeLocalCatalog('ai', 'test_user', { home: tempDir, platform: 'darwin' })
+      expect(result.map(model => model.id)).toEqual(['gemini-3.1-pro', 'gemini-3-flash-solo', 'deepseek-v3.2'])
+      expect(result.map(model => model.name)).toEqual(['Gemini-3.1-Pro-Preview', 'Gemini-3-Flash-Preview', 'DeepSeek-V3.2'])
+      expect(result[0]).toMatchObject({ contextWindow: 200000, maxContextWindow: 1000000 })
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
 })

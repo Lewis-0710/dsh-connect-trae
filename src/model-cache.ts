@@ -115,7 +115,8 @@ export async function readTraeLocalCatalog(
       if (!stdout.trim()) continue
       const document = JSON.parse(stdout) as Record<string, unknown>
       const candidateKeys = ['solo_agent', 'chat_v3', 'builder_v3', 'builder', 'code_review_summary']
-      const seen = new Set<string>()
+      const seenIds = new Set<string>()
+      const seenNames = new Set<string>()
       const models: TraeDiscoveredModel[] = []
       for (const key of candidateKeys) {
         const list = Array.isArray(document[key]) ? document[key] as unknown[] : []
@@ -126,8 +127,12 @@ export async function readTraeLocalCatalog(
             continue
           }
           const model = parseTraeRemoteModel(raw)
-          if (model === undefined || seen.has(model.id)) continue
-          seen.add(model.id)
+          if (model === undefined) continue
+          const idKey = model.id.trim().toLowerCase()
+          const nameKey = model.name.trim().toLowerCase()
+          if (seenIds.has(idKey) || seenNames.has(nameKey)) continue
+          seenIds.add(idKey)
+          seenNames.add(nameKey)
           models.push(model)
         }
       }

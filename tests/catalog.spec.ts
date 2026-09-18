@@ -191,6 +191,22 @@ describe('mergeTraeModelSources', () => {
     const merged = mergeTraeModelSources(remote, wire)
     expect(merged.map(model => model.id)).toEqual(['glm-5.2'])
   })
+
+  it('deduplicates remote models by id and display name preserving the first match', () => {
+    const remote: TraeDiscoveredModel[] = [
+      { id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview', multimodal: true, reasoningSupported: true },
+      { id: 'gemini-3-flash-solo', name: 'Gemini-3-Flash-Preview', multimodal: true, reasoningSupported: true },
+      { id: 'gemini-3-flash-premium', name: 'Gemini-3-Flash-Preview', multimodal: true, reasoningSupported: true },
+      { id: 'gemini-3-pro', name: 'Gemini-3.1-Pro-Preview', multimodal: true, reasoningSupported: true },
+    ]
+    const wire = [
+      { id: 'custom_model_gemini', name: 'Gemini-3.1-Pro-Preview' },
+      { id: 'custom_model_gemini_flash', name: 'Gemini-3-Flash-Preview' },
+    ]
+    const merged = mergeTraeModelSources(remote, wire)
+    expect(merged.map(model => model.id)).toEqual(['gemini-3.1-pro', 'gemini-3-flash-solo'])
+    expect(merged.map(model => model.name)).toEqual(['Gemini-3.1-Pro-Preview', 'Gemini-3-Flash-Preview'])
+  })
 })
 
 describe('region-scoped fallback directories', () => {
