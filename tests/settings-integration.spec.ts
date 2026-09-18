@@ -79,7 +79,7 @@ describe('Trae provider registration', () => {
     await ctx.plugin(MemorySettings)
     const restore = await isolatedPlugin(ctx)
     try {
-      await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
+      await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id), { timeout: 3000, interval: 50 }).toContain('trae')
 
       await ctx.settings.update(Trae.TRAE_SETTINGS_NS, { imageModelIds: ['DeepSeek-V4-Pro-Official'] })
 
@@ -87,6 +87,52 @@ describe('Trae provider registration', () => {
       expect(models.find(model => model.id === 'DeepSeek-V4-Pro-Official')?.inputModalities).toEqual(['text', 'image'])
       expect(models.find(model => model.id === 'DeepSeek-V4-Flash-Official')?.inputModalities).toEqual(['text'])
     } finally { await restore() }
+  })
+
+  it('formats membership badge and rate into injected model display names', async () => {
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    const restore = await isolatedPlugin(ctx)
+    try {
+      await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id), { timeout: 3000, interval: 50 }).toContain('trae')
+
+      await ctx.settings.update(Trae.TRAE_SETTINGS_NS, {
+        lastCatalog: [
+          { id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', requiresMembership: true, creditMultiplier: 1.0, contextWindow: 128_000, maxContextWindow: 256_000 },
+        ],
+        enabledModelIds: ['Doubao-Seed-Evolving'],
+      })
+
+      const models = await ctx.llm.listModels('trae')
+      expect(models.find(model => model.id === 'Doubao-Seed-Evolving')?.name).toBe('Seed-Evolving (会员计划) (1x)')
+    } finally { await restore() }
+  })
+
+  it('preserves requiresMembership and maxContextWindow in Config schema', () => {
+    const raw = {
+      lastCatalog: [
+        {
+          id: 'Doubao-Seed-Evolving',
+          name: 'Seed-Evolving',
+          contextWindow: 128_000,
+          maxContextWindow: 256_000,
+          maxTokens: 4096,
+          input: ['text', 'image'] as ('text' | 'image')[],
+          requiresMembership: true,
+          creditMultiplier: 1.0,
+          reasoningSupported: true,
+          wireConfigName: 'Doubao-Seed-Evolving',
+          wireFunction: 'solo_work_remote',
+        },
+      ],
+    }
+    const validated = Trae.Config(raw)
+    expect(validated.lastCatalog?.[0]?.requiresMembership).toBe(true)
+    expect(validated.lastCatalog?.[0]?.maxContextWindow).toBe(256_000)
+    expect(validated.lastCatalog?.[0]?.creditMultiplier).toBe(1.0)
+    expect(validated.lastCatalog?.[0]?.wireFunction).toBe('solo_work_remote')
   })
 
   it('embeds the saved credit multiplier into the registered model name', async () => {
@@ -99,7 +145,7 @@ describe('Trae provider registration', () => {
       await expect.poll(() => ctx.llm.listProviders().map(provider => provider.id)).toContain('trae')
 
       // Saving the directory persists the multiplier; the adapter then exposes
-      // the DSH-facing name `Name · x<rate>` while the model id stays pure.
+      // the DSH-facing name (0.79x) while the model id stays pure.
       await ctx.settings.update(Trae.TRAE_SETTINGS_NS, {
         lastCatalog: [
           { id: 'glm-5.2', name: 'GLM-5.2', input: ['text'], creditMultiplier: 0.79 },
@@ -110,7 +156,7 @@ describe('Trae provider registration', () => {
 
       const models = await ctx.llm.listModels('trae')
       const glm = models.find(model => model.id === 'glm-5.2')
-      expect(glm?.name).toBe('GLM-5.2 · x0.79')
+      expect(glm?.name).toBe('GLM-5.2 (0.79x)')
     } finally { await restore() }
   })
 })

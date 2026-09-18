@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseTraeCachedModel } from '../src/model-cache.ts'
+import { parseTraeCachedModel, readTraeLocalCatalog } from '../src/model-cache.ts'
 
 describe('Trae cached model config', () => {
   it('keeps only safe prompt/model fields and parses custom_config', () => {
@@ -18,5 +18,10 @@ describe('Trae cached model config', () => {
   it('does not invent invalid or missing values', () => {
     expect(parseTraeCachedModel({ name: 'm', custom_config: '{bad', max_tokens: 0 })).toEqual({ name: 'm' })
     expect(parseTraeCachedModel({})).toBeUndefined()
+  })
+
+  it('gracefully returns empty array on nonexistent database path', async () => {
+    const result = await readTraeLocalCatalog('cn', 'nonexistent-user', { home: '/nonexistent/path' })
+    expect(result).toEqual([])
   })
 })

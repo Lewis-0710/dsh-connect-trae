@@ -13,10 +13,12 @@ import {
   TRAE_PROVIDERS,
 } from './adapter.ts'
 import type { TraeAdapter } from './adapter.ts'
-import { TraeCredentialStore } from './auth.ts'
-import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, fallbackModelsFor, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeModelInfo } from './catalog.ts'
+import { TraeCredentialStore, type TraeCredential } from './auth.ts'
+import { applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, FALLBACK_TRAE_MODELS_AI, fallbackModelsFor, formatTraeModelDisplayName, isMembershipModel, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeModelInfo } from './catalog.ts'
 import { refreshTraeCredential, type TraeRefreshDevice } from './refresh.ts'
-import { readTraeIdentity, resolveTraeIdentity } from './identity.ts'
+import { pickTraeStorageIdentity, readTraeIdentity, resolveTraeIdentity } from './identity.ts'
+import { readTraeLocalCatalog } from './model-cache.ts'
+import type { TraeDiscoveredModel } from './model-metadata.ts'
 import { traeStorageCandidates, type TraeEdition } from './paths.ts'
 import { regionOfCredential, regionOfEdition, regionOfHost, regionOfUserRegion, REGION_GATEWAYS, type TraeRegion, type TraeRegionGateways } from './region.ts'
 import { createTraeShim } from './shim.ts'
@@ -59,11 +61,11 @@ export {
   type TraeRegion,
   type TraeRegionGateways,
 } from './region.ts'
-export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, FALLBACK_TRAE_MODELS_AI, fallbackModelsFor, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, traeModelDisplayName, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
+export { applyContextBudgets, applyImageSelection, deriveCatalog, discoveredCatalog, FALLBACK_TRAE_MODELS, FALLBACK_TRAE_MODELS_AI, fallbackModelsFor, formatTraeModelDisplayName, isMembershipModel, mergeTraeModelSources, sanitizeCatalog, TraeCatalog, traeInputModalities, type TraeContextBudget, type TraeInputModality, type TraeModelInfo, type TraeWireModel } from './catalog.ts'
 export { decryptTraeStorageValue, parseTraeAuthValue, parseTraeStorageDocument } from './decrypt.ts'
 export { identityHeaders, pickTraeStorageIdentity, readTraeCliIdentity, readTraeIdentity, resolveTraeIdentity, type TraeIdentity } from './identity.ts'
 export { parseObservedModelConfig, type TraeObservedModelConfig } from './model-config.ts'
-export { parseTraeCachedModel, readTraeCachedModel, type TraeCachedModelConfig } from './model-cache.ts'
+export { parseTraeCachedModel, readTraeCachedModel, readTraeLocalCatalog, type TraeCachedModelConfig } from './model-cache.ts'
 export { parseTraeModelExtraConfigLogLine, parseTraeRawChatBehaviorConfig, type TraeRawChatBehaviorConfig } from './model-extra-config.ts'
 export { buildTraeModelDetailRequest, TRAE_MODEL_DETAIL_FUNCTIONS, TRAE_MODEL_DETAIL_PATH, type TraeModelDetailRequest } from './model-detail.ts'
 export { parseTraeRemoteModel, type TraeDiscoveredModel, type TraeDiscoveredReasoning } from './model-metadata.ts'
@@ -193,9 +195,11 @@ const modelConfig = z.object({
   contextWindow: z.number().step(1).min(1),
   maxTokens: z.number().step(1).min(1),
   input: z.array(z.union(['text', 'image'])),
-  // Declared so the multiplier survives future hosts whose settings schema
-  // might strip unknown fields; it feeds the DSH-facing display name.
   creditMultiplier: z.number(),
+  maxContextWindow: z.number().step(1).min(1),
+  requiresMembership: z.boolean(),
+  reasoningSupported: z.boolean(),
+  wireConfigName: z.string(),
   // The directory function this model must be called through (Trae's roster is
   // split across SOLO-mode functions; glm-5.3 answers only solo_work_remote).
   // Persisted so a saved directory keeps working after a restart.
@@ -497,18 +501,28 @@ export function apply(ctx: Context, config: Config): void {
       delegating,
       usageClient,
       discoverModels: async (signal?: AbortSignal): Promise<readonly TraeModelInfo[]> => {
-        // The Remote /models directory is the model skeleton (display id, name,
-        // context, credit, reasoning). get_detail_param only supplies the real
-        // llm_utils_chat config_name for models whose display id differs from
-        // the wire id (e.g. Seed-Code); it does not define the catalog itself.
-        // The remote directory is the merge skeleton (it is what filters
-        // agent-internal configs out of the wire roster). Trae's directory
-        // endpoints rate-limit aggressively — observed as an intermittent
-        // HTTP 401 on a credential that answers 200 seconds earlier — so a
-        // transient rejection must not silently collapse the whole catalog to
-        // the saved snapshot. Retry it once before giving up.
-        const remote = await withDirectoryRetry(() => remoteCatalog.fetchModels(signal))
-        const wireModels = await solo.fetchModels(signal)
+        // Prefer reading the live local model catalogue from Trae's state.vscdb
+        // when available: it contains the latest promotion rates (e.g. 0.08x, 0.06x)
+        // and newest in-IDE models that may lag on the public Web API.
+        let remote: readonly TraeDiscoveredModel[] = []
+        try {
+          const userCredential = await store.current()
+          if (userCredential?.userId) {
+            const local = await readTraeLocalCatalog(region, userCredential.userId)
+            if (local.length > 0) remote = local
+          }
+        } catch {
+          // Local sqlite/state.vscdb reading failed or unavailable -> fall back to remote
+        }
+        if (remote.length === 0) {
+          remote = await withDirectoryRetry(() => remoteCatalog.fetchModels(signal))
+        }
+        let wireModels: import('./solo.ts').TraeSoloModel[] = []
+        try {
+          wireModels = await solo.fetchModels(signal)
+        } catch (error: unknown) {
+          ctx.logger.warn('dsh-connect-trae: Failed to fetch wire models from get_detail_param', error)
+        }
         const merged = mergeTraeModelSources(remote, wireModels)
         // Record every callable display key (id and name) so stale saved
         // catalogs are filtered against the live wire map and dead
@@ -518,6 +532,9 @@ export function apply(ctx: Context, config: Config): void {
         for (const model of merged) {
           wire.callableKeys.add(model.id.trim().toLowerCase())
           wire.callableKeys.add(model.name.trim().toLowerCase())
+          if (model.wireConfigName !== undefined) {
+            wire.callableKeys.add(model.wireConfigName.trim().toLowerCase())
+          }
         }
         // Mark the wire map authoritative only once a merge produced rows. A
         // live Trae account that reports only part of the catalog (or an
@@ -664,7 +681,7 @@ export function apply(ctx: Context, config: Config): void {
         )
         return next.map(model => ({
           id: model.id,
-          name: traeModelDisplayName(model),
+          name: formatTraeModelDisplayName(model),
           ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
           ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
           // Current dsh-llm discovery types do not yet declare this field, but

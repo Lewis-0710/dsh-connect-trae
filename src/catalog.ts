@@ -17,6 +17,7 @@ export interface TraeModelInfo {
   maxTokens?: number
   input?: TraeInputModality[]
   creditMultiplier?: number
+  requiresMembership?: boolean
   reasoningSupported?: boolean
   reasoning?: TraeDiscoveredReasoning
   reasoningEfforts?: Partial<Record<TraeReasoningEffort, string | null>>
@@ -93,25 +94,32 @@ export function traeInputModalities(model: Pick<TraeModelInfo, 'input'>): TraeIn
   return [...(model.input ?? ['text'])]
 }
 
-/**
- * Compose the DSH-facing model name: Trae's own model picker renders each
- * entry as `Name · x<rate>`, so the credit multiplier is shown inside the
- * name. `TraeModelInfo.name` keeps the pure Trae display name — every join
- * (wire resolution, callable-key filtering) must keep matching the
- * undecorated name; only the model rows handed to DSH (adapter catalog and
- * model discovery) use this decorated name.
- */
-export function traeModelDisplayName(model: Pick<TraeModelInfo, 'name' | 'creditMultiplier'>): string {
-  return model.creditMultiplier === undefined
-    ? model.name
-    : `${model.name} · x${model.creditMultiplier.toFixed(2)}`
+export function isMembershipModel(model: Pick<TraeModelInfo, 'id' | 'name' | 'requiresMembership'>): boolean {
+  return model.requiresMembership === true
 }
 
-/** Apply the user's explicit image opt-ins; upstream and saved row hints are ignored. */
+/** Format the injected model alias (display name) including membership badge and credit multiplier. */
+export function formatTraeModelDisplayName(
+  model: Pick<TraeModelInfo, 'id' | 'name' | 'creditMultiplier' | 'requiresMembership'>,
+): string {
+  const parts: string[] = [model.name]
+  if (isMembershipModel(model)) {
+    parts.push('(会员计划)')
+  }
+  if (model.creditMultiplier !== undefined) {
+    parts.push(`(${Number(model.creditMultiplier.toFixed(2))}x)`)
+  }
+  return parts.join(' ')
+}
+
+/** Apply the user's explicit image opt-ins; if selected is empty/undefined, preserves native image capability. */
 export function applyImageSelection(
   models: readonly TraeModelInfo[],
-  selected: ReadonlySet<string>,
+  selected?: ReadonlySet<string>,
 ): TraeModelInfo[] {
+  if (selected === undefined || selected.size === 0) {
+    return models.map(model => ({ ...model, input: model.input ?? ['text'] }))
+  }
   return models.map(model => ({ ...model, input: selected.has(model.id) ? ['text', 'image'] : ['text'] }))
 }
 
@@ -173,8 +181,8 @@ export function mergeTraeModelSources(
   const result: TraeModelInfo[] = []
   for (const model of remote) {
     const wireModel = wireById.get(displayKey(model.id)) ?? wireByName.get(displayKey(model.name))
-    // No config_name maps to this display id → uncallable via llm_utils_chat.
-    // Drop it rather than advertise a model that always fails with 4001.
+    // No config_name maps to this display id → uncallable via llm_utils_chat (e.g. IDE-only flash/preview models).
+    // Drop it rather than advertise a model that always fails with 4001 "param is invalid".
     if (wireModel === undefined) continue
     result.push({
       id: model.id,
@@ -182,14 +190,15 @@ export function mergeTraeModelSources(
       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
       ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
       ...model.creditMultiplier === undefined ? {} : { creditMultiplier: model.creditMultiplier },
-      input: ['text'],
+      input: model.multimodal ? ['text', 'image'] : ['text'],
+      ...model.requiresMembership ? { requiresMembership: true } : {},
       reasoningSupported: model.reasoningSupported,
       ...model.reasoning === undefined ? {} : {
         reasoning: model.reasoning,
         reasoningEfforts: Object.fromEntries(model.reasoning.supported.map(effort => [effort, effort === 'low' ? 'light' : effort === 'xhigh' ? 'extra_high' : 'high'])) as Partial<Record<TraeReasoningEffort, string>>,
       },
-      ...wireModel.id !== '' && wireModel.id !== model.id ? { wireConfigName: wireModel.id } : {},
-      ...wireModel.function === undefined ? {} : { wireFunction: wireModel.function },
+      ...wireModel !== undefined && wireModel.id !== '' && wireModel.id !== model.id ? { wireConfigName: wireModel.id } : {},
+      ...wireModel?.function === undefined ? {} : { wireFunction: wireModel.function },
     })
   }
   return result
@@ -199,23 +208,25 @@ export function mergeTraeModelSources(
 export type TraeContextBudget = number
 
 /**
- * Apply the saved local budget. Trae advertises two windows per model (dev and
- * Max), so the budget may only switch a model to its own advertised Max value —
- * never to a fabricated number. Everything else keeps the dev window.
+ * Apply the saved local budget.
  */
 export function applyContextBudgets(
   catalog: readonly TraeModelInfo[],
   budgets: Readonly<Record<string, TraeContextBudget | undefined>> = {},
 ): TraeModelInfo[] {
-  return catalog.map(model => ({
-    ...model,
-    ...(model.maxContextWindow !== undefined && budgets[model.id] === model.maxContextWindow
-      ? { contextWindow: model.maxContextWindow }
-      : {}),
-  }))
+  return catalog.map(model => {
+    const explicit = budgets[model.id]
+    if (explicit !== undefined) {
+      return { ...model, contextWindow: explicit }
+    }
+    if (model.maxContextWindow !== undefined && model.maxContextWindow > (model.contextWindow ?? 0)) {
+      return { ...model, contextWindow: model.maxContextWindow }
+    }
+    return model
+  })
 }
 
-/** Convert Trae metadata into text-only model rows; image support is user-owned configuration. */
+/** Convert Trae metadata into model rows with native multimodal and context attributes. */
 export function discoveredCatalog(models: readonly TraeDiscoveredModel[]): TraeModelInfo[] {
   const result: TraeModelInfo[] = []
   for (const model of models) {
@@ -224,7 +235,8 @@ export function discoveredCatalog(models: readonly TraeDiscoveredModel[]): TraeM
       name: model.name,
       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
       ...model.maxContextWindow === undefined ? {} : { maxContextWindow: model.maxContextWindow },
-      input: ['text'],
+      input: model.multimodal ? ['text', 'image'] : ['text'],
+      ...model.requiresMembership ? { requiresMembership: true } : {},
       ...model.creditMultiplier === undefined ? {} : { creditMultiplier: model.creditMultiplier },
       reasoningSupported: model.reasoningSupported,
       ...model.reasoning === undefined ? {} : {
@@ -248,21 +260,30 @@ export function sanitizeCatalog(catalog: readonly TraeModelInfo[]): TraeModelInf
   })
 }
 
+const DEFAULT_MIN_CONTEXT = 1_000_000
+
+export function isLargeContextModel(model: Pick<TraeModelInfo, 'maxContextWindow' | 'contextWindow'>): boolean {
+  return (model.maxContextWindow ?? model.contextWindow ?? 0) >= DEFAULT_MIN_CONTEXT
+}
+
+export function defaultEnabledModelIds(catalog: readonly TraeModelInfo[]): string[] {
+  const large = catalog.filter(isLargeContextModel).map(model => model.id)
+  return large.length > 0 ? large : catalog.map(model => model.id)
+}
+
 /**
  * Derive the runtime catalog from the last refreshed Trae directory plus the
  * user's explicit selection and context budgets. An empty selection falls back
- * to the whole directory: a plugin that has never been configured must still
- * serve models rather than nothing. This is the single source of truth for
- * what DSH actually exposes, so saving only the selection and budgets is
- * enough to rebuild it after a restart.
+ * to models with max context >= 1M (or the whole directory if none are >= 1M).
  */
 export function deriveCatalog(
   catalog: readonly TraeModelInfo[],
   enabled: ReadonlySet<string>,
   budgets: Readonly<Record<string, TraeContextBudget | undefined>> = {},
 ): TraeModelInfo[] {
-  const selected = enabled.size === 0 ? catalog : catalog.filter(model => enabled.has(model.id))
-  return applyContextBudgets(selected, budgets)
+  const effectiveEnabled = enabled.size === 0 ? new Set(defaultEnabledModelIds(catalog)) : enabled
+  const selected = catalog.filter(model => effectiveEnabled.has(model.id))
+  return applyContextBudgets(selected.length > 0 ? selected : catalog, budgets)
 }
 
 export class TraeCatalog {

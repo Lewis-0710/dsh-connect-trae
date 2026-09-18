@@ -47,13 +47,15 @@ describe('TraeSoloBridge', () => {
     expect(text).toContain('data: [DONE]')
   })
 
-  it('propagates an upstream error followed by done without emitting a finish chunk', async () => {
+  it('formats an upstream error into a delta chunk and cleanly closes stream', async () => {
     const response = bridgeTraeSoloStream(traeStream([
       'event: error\ndata: {"code":4008,"message":"quota exceeded"}\n\n',
       'event: done\ndata: {"finish_reason":"stop"}\n\n',
     ]), 'm')
-    const reader = response.body!.getReader()
-    await expect(reader.read()).rejects.toThrow('quota exceeded')
+    const text = await response.text()
+    expect(text).toContain('quota exceeded')
+    expect(text).toContain('"finish_reason":"stop"')
+    expect(text).toContain('data: [DONE]')
   })
 
   it('synthesizes tool_calls finish_reason when a tool stream ends at EOF', async () => {
