@@ -8,11 +8,12 @@ import {
   FALLBACK_TRAE_MODELS,
   FALLBACK_TRAE_MODELS_AI,
   fallbackModelsFor,
+  formatTraeModelDisplayName,
+  isMembershipModel,
   mergeTraeModelSources,
   sanitizeCatalog,
   TraeCatalog,
   traeInputModalities,
-  traeModelDisplayName,
 } from '../src/catalog.ts'
 
 const RAW = discoveredCatalog([{
@@ -24,6 +25,15 @@ const RAW = discoveredCatalog([{
   id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', multimodal: false,
   contextWindow: 200_000, reasoningSupported: false,
 }])
+
+describe('formatTraeModelDisplayName', () => {
+  it('formats display name with rate and membership badge', () => {
+    expect(formatTraeModelDisplayName({ id: 'glm-5.2', name: 'GLM-5.2' })).toBe('GLM-5.2')
+    expect(formatTraeModelDisplayName({ id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', creditMultiplier: 1.0, requiresMembership: true })).toBe('Seed-Evolving (会员计划) (1x)')
+    expect(formatTraeModelDisplayName({ id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving', requiresMembership: true })).toBe('Seed-Evolving (会员计划)')
+    expect(formatTraeModelDisplayName({ id: 'Doubao-Seed-Evolving', name: 'Seed-Evolving' })).toBe('Seed-Evolving')
+  })
+})
 
 describe('Trae catalog', () => {
   it('starts with fallback entries that are text-only but sized', () => {
@@ -59,29 +69,34 @@ describe('Trae catalog', () => {
     expect(cnIds).not.toContain('DeepSeek-V4-Pro')
   })
 
-  it('ignores uncertain upstream multimodal flags and keeps one text-only entry per model', () => {
+  it('parses native multimodal capability and context windows', () => {
     expect(RAW).toEqual([
       expect.objectContaining({
         id: 'qwen3.8-max', contextWindow: 200_000, maxContextWindow: 1_000_000,
-        creditMultiplier: 1.5, input: ['text'],
+        creditMultiplier: 1.5, input: ['text', 'image'],
       }),
       expect.objectContaining({ id: 'deepseek-v4-pro', contextWindow: 200_000, input: ['text'] }),
     ])
     expect(RAW.some(model => model.id.includes('@1m'))).toBe(false)
   })
 
-  it('uses only explicit image opt-ins and overwrites stale saved modalities', () => {
+  it('uses explicit image opt-ins when provided', () => {
     const stale = RAW.map(model => ({ ...model, input: ['text', 'image'] as ('text' | 'image')[] }))
-    expect(applyImageSelection(stale, new Set(['qwen3.8-max']))).toEqual([
-      expect.objectContaining({ id: 'qwen3.8-max', input: ['text', 'image'] }),
-      expect.objectContaining({ id: 'deepseek-v4-pro', input: ['text'] }),
+    expect(applyImageSelection(stale, new Set(['deepseek-v4-pro']))).toEqual([
+      expect.objectContaining({ id: 'qwen3.8-max', input: ['text'] }),
+      expect.objectContaining({ id: 'deepseek-v4-pro', input: ['text', 'image'] }),
     ])
-    expect(applyImageSelection(stale, new Set()).every(model => model.input?.join(',') === 'text')).toBe(true)
   })
 
-  it('serves the whole directory when nothing is enabled yet', () => {
+  it('serves models with max context >= 1M when nothing is enabled yet', () => {
     expect(deriveCatalog(RAW, new Set()).map(model => model.id)).toEqual([
       'qwen3.8-max',
+    ])
+  })
+
+  it('falls back to whole directory when no models have >= 1M max context', () => {
+    const small = [RAW[1]!]
+    expect(deriveCatalog(small, new Set()).map(model => model.id)).toEqual([
       'deepseek-v4-pro',
     ])
   })
@@ -95,11 +110,10 @@ describe('Trae catalog', () => {
     expect(derived).toEqual([
       expect.objectContaining({
         id: 'qwen3.8-max', contextWindow: 1_000_000,
-        maxContextWindow: 1_000_000, input: ['text'],
+        maxContextWindow: 1_000_000, input: ['text', 'image'],
       }),
     ])
     expect(derived.some(model => model.id.includes('@1m'))).toBe(false)
-    expect(applyContextBudgets(RAW, { 'qwen3.8-max': 999_999 })[0]?.contextWindow).toBe(200_000)
   })
 
   it('drops legacy variant rows and rejects replacing the live catalog with an empty list', () => {
@@ -112,22 +126,10 @@ describe('Trae catalog', () => {
   })
 })
 
-describe('traeModelDisplayName', () => {
-  it('embeds the credit multiplier into the DSH-facing name like Trae own model picker', () => {
-    expect(traeModelDisplayName({ name: 'GLM-5.3', creditMultiplier: 0.79 })).toBe('GLM-5.3 · x0.79')
-    expect(traeModelDisplayName({ name: 'Hy4 preview', creditMultiplier: 0 })).toBe('Hy4 preview · x0.00')
-    expect(traeModelDisplayName({ name: 'Seed-Evolving', creditMultiplier: 0.77 })).toBe('Seed-Evolving · x0.77')
-  })
-
-  it('keeps the pure name when Trae advertises no multiplier', () => {
-    expect(traeModelDisplayName({ name: 'GLM-5.3' })).toBe('GLM-5.3')
-  })
-})
-
 describe('mergeTraeModelSources', () => {
-  it('keeps the remote directory id as the model id and attaches the wire config_name', () => {
+  it('keeps the remote directory id as the model id and attaches the wire config_name and requiresMembership', () => {
     const remote: TraeDiscoveredModel[] = [
-      { id: 'Doubao-Seed-Code', name: 'Seed-Code', multimodal: true, contextWindow: 128_000, maxContextWindow: 256_000, creditMultiplier: 1.5, reasoningSupported: true, reasoning: { supported: ['low', 'high', 'xhigh'], defaultEffort: 'high' } },
+      { id: 'Doubao-Seed-Code', name: 'Seed-Code', multimodal: true, requiresMembership: true, contextWindow: 128_000, maxContextWindow: 256_000, creditMultiplier: 1.5, reasoningSupported: true, reasoning: { supported: ['low', 'high', 'xhigh'], defaultEffort: 'high' } },
       { id: 'glm-5.2', name: 'GLM-5.2', multimodal: false, contextWindow: 168_000, reasoningSupported: false },
     ]
     const wire = [
@@ -142,7 +144,8 @@ describe('mergeTraeModelSources', () => {
       contextWindow: 128_000,
       maxContextWindow: 256_000,
       creditMultiplier: 1.5,
-      input: ['text'],
+      input: ['text', 'image'],
+      requiresMembership: true,
       wireConfigName: 'Doubao_1_6',
     })
     // Reasoning comes from the remote skeleton, mapped to Trae wire effort strings.
@@ -174,8 +177,8 @@ describe('mergeTraeModelSources', () => {
 
   it('drops remote models that map to no wire config_name (uncallable → would 4001)', () => {
     // Doubao-Seed-Code and glm-5.3 are advertised by the Remote directory but
-    // are NOT current `config_name`s in get_detail_param; sending them makes
-    // every request fail with 4001 "param is invalid". They must not ship.
+    // must map to a valid config_name in get_detail_param; uncallable models
+    // are dropped to avoid 4001 "param is invalid" errors.
     const remote: TraeDiscoveredModel[] = [
       { id: 'Doubao-Seed-Code', name: 'Seed-Code', multimodal: true, reasoningSupported: true },
       { id: 'glm-5.3', name: 'GLM-5.3', multimodal: false, reasoningSupported: false },
@@ -187,6 +190,22 @@ describe('mergeTraeModelSources', () => {
     ]
     const merged = mergeTraeModelSources(remote, wire)
     expect(merged.map(model => model.id)).toEqual(['glm-5.2'])
+  })
+
+  it('deduplicates remote models by id and display name preserving the first match', () => {
+    const remote: TraeDiscoveredModel[] = [
+      { id: 'gemini-3.1-pro', name: 'Gemini-3.1-Pro-Preview', multimodal: true, reasoningSupported: true },
+      { id: 'gemini-3-flash-solo', name: 'Gemini-3-Flash-Preview', multimodal: true, reasoningSupported: true },
+      { id: 'gemini-3-flash-premium', name: 'Gemini-3-Flash-Preview', multimodal: true, reasoningSupported: true },
+      { id: 'gemini-3-pro', name: 'Gemini-3.1-Pro-Preview', multimodal: true, reasoningSupported: true },
+    ]
+    const wire = [
+      { id: 'custom_model_gemini', name: 'Gemini-3.1-Pro-Preview' },
+      { id: 'custom_model_gemini_flash', name: 'Gemini-3-Flash-Preview' },
+    ]
+    const merged = mergeTraeModelSources(remote, wire)
+    expect(merged.map(model => model.id)).toEqual(['gemini-3.1-pro', 'gemini-3-flash-solo'])
+    expect(merged.map(model => model.name)).toEqual(['Gemini-3.1-Pro-Preview', 'Gemini-3-Flash-Preview'])
   })
 })
 
@@ -266,7 +285,7 @@ describe('only callable models are ever served', () => {
     const remote = [
       { id: 'glm-5.2', name: 'GLM-5.2', multimodal: false, reasoningSupported: false },
       // Advertised by the remote directory but absent from the wire roster:
-      // exactly the shape of a dead config_name such as Doubao-Seed-Code.
+      // exactly the shape of a dead config_name such as IDE-only flash models.
       { id: 'deepseek-v4.1-flash', name: 'DeepSeek-V4.1-Flash', multimodal: false, reasoningSupported: false },
     ]
     const merged = mergeTraeModelSources(remote, [{ id: 'glm-5.2', name: 'GLM-5.2' }])

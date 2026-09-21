@@ -99,14 +99,13 @@ export function bridgeTraeSoloStream(response: Response, model: string): Respons
           // OpenAI finish chunk only; pi-ai requires a non-null finish_reason
           // before the stream closes.
           if (!emittedFinishReason) {
-            // Mark the terminal state before erroring the controller so the
-            // post-loop fallback never enqueues after controller.error().
             emittedFinishReason = true
             if (upstreamError !== undefined) {
-              controller.error(upstreamError)
-              return
+              controller.enqueue(chunk({ content: `\n\n⚠️ **[Trae 错误]**: ${upstreamError.message}` }))
+              controller.enqueue(chunk({}, 'stop'))
+            } else {
+              controller.enqueue(chunk({}, sawToolCalls ? 'tool_calls' : decoded.finishReason || 'stop'))
             }
-            controller.enqueue(chunk({}, sawToolCalls ? 'tool_calls' : decoded.finishReason || 'stop'))
           }
         }
       }
@@ -117,15 +116,16 @@ export function bridgeTraeSoloStream(response: Response, model: string): Respons
           for (const event of sse.push(decoder.decode(next.value, { stream: true }))) consume(event)
         }
         for (const event of sse.finish()) consume(event)
-        if (upstreamError !== undefined && !upstreamEnded) {
-          controller.error(upstreamError)
-          return
-        }
         // A clean EOF is a valid Trae termination even when it omits an
         // explicit done event. Synthesize the required OpenAI finish chunk.
         if (!emittedFinishReason) {
           emittedFinishReason = true
-          controller.enqueue(chunk({}, sawToolCalls ? 'tool_calls' : 'stop'))
+          if (upstreamError !== undefined) {
+            controller.enqueue(chunk({ content: `\n\n⚠️ **[Trae 错误]**: ${upstreamError.message}` }))
+            controller.enqueue(chunk({}, 'stop'))
+          } else {
+            controller.enqueue(chunk({}, sawToolCalls ? 'tool_calls' : 'stop'))
+          }
         }
         controller.enqueue(encoder.encode('data: [DONE]\n\n'))
         controller.close()
@@ -195,9 +195,14 @@ export class TraeSoloBridge implements TraeUpstreamClient {
       if (wireFunction !== undefined && input['function'] !== wireFunction) {
         input['function'] = wireFunction
       }
-      if (wireModel !== JSON.parse(bodyJson)['model'] || wireFunction !== undefined) {
-        prepared = JSON.stringify(input)
+      if (typeof input['function'] !== 'string' || input['function'] === '') {
+        const isAgentModel = model.startsWith('gemini') || model.startsWith('minimax') || model.startsWith('kimi') || model.startsWith('Dola')
+          || wireModel.startsWith('gemini') || wireModel.startsWith('minimax') || wireModel.startsWith('kimi') || wireModel.startsWith('Dola')
+        if (isAgentModel) {
+          input['function'] = 'solo_agent_lite'
+        }
       }
+      prepared = JSON.stringify(input)
       if (typeof input['reasoning_effort'] === 'string') {
         const info = entry
         const efforts = info?.reasoningEfforts

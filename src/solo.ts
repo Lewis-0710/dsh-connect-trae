@@ -19,8 +19,8 @@ export const TRAE_SOLO_FUNCTION = 'solo_work_lite'
  * order below decides which wire name a model is called with.
  */
 export const TRAE_DIRECTORY_FUNCTIONS: Readonly<Record<TraeRegion, readonly string[]>> = {
-  cn: ['solo_work_remote', TRAE_SOLO_FUNCTION],
-  ai: ['solo_agent', 'solo_work_remote', TRAE_SOLO_FUNCTION],
+  cn: ['solo_work_remote', 'solo_agent', 'builder_v3', 'code_review_summary', TRAE_SOLO_FUNCTION],
+  ai: ['solo_work_remote', 'solo_work_lite', 'solo_agent_lite', 'builder_v3', 'code_review_summary', 'solo_agent'],
 }
 export const TRAE_SOLO_CHAT_PATH = '/api/agent/v3/llm_utils_chat'
 export const TRAE_SOLO_MODELS_PATH = '/api/ide/v1/get_detail_param'
@@ -42,6 +42,9 @@ export function prepareSoloBody(source: string, defaultModel = 'glm-5.2', functi
   const input = JSON.parse(source) as Record<string, unknown>
   const requestedModel = typeof input['model'] === 'string' && input['model'].trim() !== '' ? input['model'].trim() : defaultModel
   const model = requestedModel
+  const requestedFunction = typeof input['function'] === 'string' && input['function'].trim() !== ''
+    ? input['function'].trim()
+    : TRAE_SOLO_FUNCTION
   // llm_utils_chat is not an OpenAI-compatible endpoint. Build its evidenced
   // envelope explicitly so optional Pi/OpenAI fields (temperature, max_tokens,
   // tool_choice, response_format, etc.) cannot make every model fail validation.

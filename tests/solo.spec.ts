@@ -174,7 +174,7 @@ describe('region-scoped model directory function', () => {
     expiresAtMs: Date.now() + 1000, edition: 'solo-sg', source: 'desktop',
   }
 
-  it('asks the ai gateway for the solo_agent directory', async () => {
+  it('asks the ai gateway with solo_work_remote first', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => new Response(JSON.stringify({ config_info_list: [
       { config_name: 'minimax-m3', display_config: { display_name: 'MiniMax-M3' }, model_detail_list: [{ prompt_max_tokens: 200000, max_tokens: 32000 }] },
     ] }), { status: 200 }))
@@ -185,9 +185,9 @@ describe('region-scoped model directory function', () => {
     })
     await client.fetchModels()
     const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string)
-    // The ai directory must come from solo_agent: solo_work_lite omits four of
-    // the seven remote-roster models on the international gateway.
-    expect(body['function']).toBe('solo_agent')
+    // The ai directory queries solo_work_remote first so models like gpt-5.4/5.2
+    // route to solo_work_remote rather than solo_agent (avoiding 4011 quota errors).
+    expect(body['function']).toBe('solo_work_remote')
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('https://coresg-normal.trae.ai/api/ide/v1/get_detail_param')
   })
 
@@ -204,7 +204,7 @@ describe('region-scoped model directory function', () => {
     const functions = fetchImpl.mock.calls.map(call => JSON.parse((call[1] as RequestInit).body as string)['function'])
     // solo_work_remote is asked FIRST: it is the only CN function that lists
     // glm-5.3, and precedence decides which function a shared config binds to.
-    expect(functions).toEqual(['solo_work_remote', 'solo_work_lite'])
+    expect(functions).toEqual(['solo_work_remote', 'solo_agent', 'builder_v3', 'code_review_summary', 'solo_work_lite'])
   })
 })
 
@@ -251,15 +251,15 @@ describe('multi-function directory union (glm-5.3 regression, issue #7)', () => 
       ] }), { status: 200, headers: { 'content-type': 'application/json' } })
     })
     const client = new TraeSoloUpstreamClient({ credential: async () => credential, identity: async () => identity, fetchImpl: fetchImpl as unknown as typeof fetch })
-    await expect(client.fetchModels()).resolves.toMatchObject([{ id: 'glm-5.2', function: 'solo_work_lite' }])
+    await expect(client.fetchModels()).resolves.toMatchObject([{ id: 'glm-5.2', function: 'solo_agent' }])
   })
 
-  it('the ai region asks solo_agent first', async () => {
+  it('the ai region asks solo_work_remote first', async () => {
     const fetchImpl = stubDirectory()
     const client = new TraeSoloUpstreamClient({ credential: async () => intlCredentialSg, identity: async () => identity, fetchImpl: fetchImpl as unknown as typeof fetch })
     await client.fetchModels()
     const functions = fetchImpl.mock.calls.map(call => JSON.parse((call[1] as RequestInit).body as string)['function'])
-    expect(functions).toEqual(['solo_agent', 'solo_work_remote', 'solo_work_lite'])
+    expect(functions).toEqual(['solo_work_remote', 'solo_work_lite', 'solo_agent_lite', 'builder_v3', 'code_review_summary', 'solo_agent'])
   })
 
   it('an explicit body function wins over the default chat function', () => {

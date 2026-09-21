@@ -214,23 +214,36 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
       if (!response.ok || !Array.isArray(body.models)) throw new Error(`HTTP ${response.status}`)
       const fresh = body.models
       const freshIds = new Set(fresh.map(model => model.id))
-      // Re-map the user's CURRENT selections (draft first, then saved) onto the
-      // fresh catalog by model id, so refresh never silently loses enabled
-      // choices, image opt-ins, or context budgets.
-      const stillEnabled = [...activeEnabledIds].filter(id => freshIds.has(id))
-      const stillImages = [...activeImageIds].filter(id => freshIds.has(id))
-      const stillBudgets: Record<string, number> = {}
-      for (const id of freshIds) {
-        const budget = activeContextBudgets[id]
-        if (typeof budget === 'number') stillBudgets[id] = budget
+
+      // 1. Keep user's enabled selection; if none were enabled, default to >= 1M
+      const stillEnabled = activeEnabledIds.size > 0
+        ? [...activeEnabledIds].filter(id => freshIds.has(id))
+        : fresh.filter(m => (m.maxContextWindow ?? m.contextWindow ?? 0) >= 1_000_000).map(m => m.id)
+      const effectiveEnabled = stillEnabled.length > 0 ? stillEnabled : fresh.map(m => m.id)
+
+      // 2. Automatically select image support (multimodal)
+      const autoImages = new Set<string>()
+      for (const m of fresh) {
+        if (m.input?.includes('image') || (m as { multimodal?: boolean }).multimodal === true || activeImageIds.has(m.id)) {
+          autoImages.add(m.id)
+        }
       }
+
+      // 3. Automatically match max context window
+      const autoBudgets: Record<string, number> = {}
+      for (const m of fresh) {
+        if (m.maxContextWindow !== undefined && m.maxContextWindow > (m.contextWindow ?? 0)) {
+          autoBudgets[m.id] = m.maxContextWindow
+        }
+      }
+
       setDrafts(prev => ({
         ...prev,
         [activeRegion]: {
-          models: fresh.map(model => ({ ...model, input: ['text'] as const })),
-          enabledIds: new Set(stillEnabled),
-          imageIds: new Set(stillImages),
-          contextBudgets: stillBudgets,
+          models: fresh,
+          enabledIds: new Set(effectiveEnabled),
+          imageIds: autoImages,
+          contextBudgets: autoBudgets,
         },
       }))
     } catch (error: unknown) {
@@ -276,22 +289,23 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
   const draft = drafts[activeRegion]
   const visibleModels = draft?.models ?? (status.status === 'signed-in' ? status.models : [])
   const savedEnabledIds = status.status === 'signed-in' ? new Set(status.enabledModelIds) : new Set<string>()
-  const activeEnabledIds = draft?.enabledIds ?? savedEnabledIds
+  const defaultLargeEnabledIds = new Set(visibleModels.filter(m => (m.maxContextWindow ?? m.contextWindow ?? 0) >= 1_000_000).map(m => m.id))
+  const initialEnabledIds = savedEnabledIds.size > 0 ? savedEnabledIds : (defaultLargeEnabledIds.size > 0 ? defaultLargeEnabledIds : new Set(visibleModels.map(m => m.id)))
+  const activeEnabledIds = draft?.enabledIds ?? initialEnabledIds
   const activeImageIds = draft?.imageIds ?? savedImageIds
   const activeContextBudgets = draft?.contextBudgets ?? savedContextBudgets
   const dirty = draft !== undefined
 
-  /** Apply an edit to the ACTIVE tab's draft, seeding it from the current view. */
-  const editDraft = (edit: (current: TraeDraft) => TraeDraft): void => {
-    setDrafts(prev => ({
-      ...prev,
-      [activeRegion]: edit(prev[activeRegion] ?? {
-        models: [...visibleModels],
+  const editDraft = (mutate: (current: TraeDraft) => TraeDraft): void => {
+    setDrafts(prev => {
+      const current = prev[activeRegion] ?? {
+        models: [...(status.status === 'signed-in' ? status.models : [])],
         enabledIds: new Set(activeEnabledIds),
         imageIds: new Set(activeImageIds),
         contextBudgets: { ...activeContextBudgets },
-      }),
-    }))
+      }
+      return { ...prev, [activeRegion]: mutate(current) }
+    })
   }
 
   const toggleModel = (modelId: string): void => {
@@ -319,6 +333,32 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
     })
   }
 
+  const resetToDefaults = (): void => {
+    const defaultEnabled = new Set(
+      visibleModels.filter(m => (m.maxContextWindow ?? m.contextWindow ?? 0) >= 1_000_000).map(m => m.id),
+    )
+    const effectiveEnabled = defaultEnabled.size > 0 ? defaultEnabled : new Set(visibleModels.map(m => m.id))
+    const defaultImages = new Set(
+      visibleModels.filter(m => m.input?.includes('image') || (m as { multimodal?: boolean }).multimodal === true).map(m => m.id),
+    )
+    const defaultBudgets: Record<string, number> = {}
+    for (const m of visibleModels) {
+      if (m.maxContextWindow !== undefined && m.maxContextWindow > (m.contextWindow ?? 0)) {
+        defaultBudgets[m.id] = m.maxContextWindow
+      }
+    }
+
+    setDrafts(prev => ({
+      ...prev,
+      [activeRegion]: {
+        models: [...visibleModels],
+        enabledIds: effectiveEnabled,
+        imageIds: defaultImages,
+        contextBudgets: defaultBudgets,
+      },
+    }))
+  }
+
   const discardModels = (): void => {
     setDrafts(prev => {
       const next = { ...prev }
@@ -331,15 +371,9 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
     if (settingsScope === undefined) return
     setSaving(true)
     try {
-      // Save this region's raw directory plus the pure selection. The Host
-      // derives the runtime catalog from these on save/restart, so re-opening
-      // the card re-reads Trae's current catalog instead of a stale snapshot.
-      // The CN and international apps expose different rosters, so the write
-      // targets the slot keyed by the active tab's region: the other region's
-      // picks are never touched.
       if (status.status !== 'signed-in') return
       await settingsScope.set('regions', nextRegionSlots(configuredRegions, activeRegion, {
-        lastCatalog: visibleModels.map(model => ({ ...model, input: ['text'] })),
+        lastCatalog: visibleModels.map(model => ({ ...model, input: model.input ?? ['text'] })),
         enabledModelIds: [...activeEnabledIds],
         imageModelIds: [...activeImageIds].filter(id => activeEnabledIds.has(id)),
         contextBudgets: activeContextBudgets,
@@ -367,7 +401,6 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
         aria-label={`${t(open ? 'row.collapse' : 'row.expand')}: ${title}`}
         onClick={() => { setOpen(!open) }}
       >
-        <img className="dsm-plugin-card-icon" src={TRAE_PLUGIN_ICON} alt="" />
         <span className="dsm-plugin-card-head">
           <span className="dsm-plugin-card-title">{title}</span>
           <span className="dsm-plugin-card-description">{t('row.desc')}</span>
@@ -496,79 +529,97 @@ export function TraeUsageCard({ t, settingsScope }: TraeUsageCardProps) {
                           <h3 className="dsm-trae-models-title">{t('row.modelsTitle')}</h3>
                           <p className="dsm-trae-models-summary">{t('row.modelsSummary', { count: activeEnabledIds.size })}</p>
                         </div>
-                        <button
-                          type="button"
-                          className="dsm-btn dsm-btn-outline"
-                          disabled={busy}
-                          onClick={() => { void refreshModels() }}
-                        >
-                          {busy ? t('row.modelsRefreshing') : t('row.modelsRefresh')}
-                        </button>
+                        <div className="dsm-trae-models-head-actions">
+                          <button
+                            type="button"
+                            className="dsm-btn dsm-btn-outline"
+                            disabled={busy}
+                            onClick={() => { void refreshModels() }}
+                          >
+                            {busy ? t('row.modelsRefreshing') : t('row.modelsRefresh')}
+                          </button>
+                          <button
+                            type="button"
+                            className="dsm-btn dsm-btn-outline"
+                            disabled={busy || saving}
+                            onClick={resetToDefaults}
+                          >
+                            {t('row.modelsResetDefaults')}
+                          </button>
+                        </div>
                       </div>
                       <div className="dsm-trae-model-list">
-                        {visibleModels.map(model => (
-                          <div className={`dsm-trae-model${activeEnabledIds.has(model.id) ? '' : ' dsm-trae-model-disabled'}`} key={model.id}>
-                            <div className="dsm-trae-model-head">
-                              <label className="dsm-trae-model-enabled">
-                                <input
-                                  type="checkbox"
-                                  checked={activeEnabledIds.has(model.id)}
-                                  disabled={settingsScope?.getSnapshot().writable !== true || saving}
-                                  onChange={() => { toggleModel(model.id) }}
-                                />
-                                <span className="dsm-trae-model-copy">
-                                  <span className="dsm-trae-model-name">
-                                    {model.name}
-                                    {model.creditMultiplier === undefined ? null
-                                      : <span className="dsm-trae-model-name-rate">· x{model.creditMultiplier.toFixed(2)}</span>}
-                                  </span>
-                                </span>
-                              </label>
-                              <div className="dsm-trae-model-options">
-                                <label className="dsm-trae-model-image">
+                        {visibleModels.map(model => {
+                          const baseContext = model.contextWindow
+                          const nativeMax = model.maxContextWindow !== undefined && model.maxContextWindow > (baseContext ?? 0)
+                            ? model.maxContextWindow
+                            : undefined
+                          const options: number[] = []
+                          if (baseContext !== undefined) options.push(baseContext)
+                          if (nativeMax !== undefined && !options.includes(nativeMax)) options.push(nativeMax)
+                          if (!options.includes(1_000_000)) options.push(1_000_000)
+                          options.sort((a, b) => a - b)
+
+                          const defaultBudget = nativeMax ?? baseContext ?? options[0]
+                          const currentBudget = activeContextBudgets[model.id] ?? defaultBudget
+                          const requiresPlan = model.requiresMembership === true
+                          return (
+                            <div className={`dsm-trae-model${activeEnabledIds.has(model.id) ? '' : ' dsm-trae-model-disabled'}`} key={model.id}>
+                              <div className="dsm-trae-model-head">
+                                <label className="dsm-trae-model-enabled">
                                   <input
                                     type="checkbox"
-                                    checked={activeImageIds.has(model.id)}
+                                    checked={activeEnabledIds.has(model.id)}
                                     disabled={settingsScope?.getSnapshot().writable !== true || saving}
-                                    onChange={() => { toggleImage(model.id) }}
+                                    onChange={() => { toggleModel(model.id) }}
                                   />
-                                  <span>{t('row.modelImage')}</span>
+                                  <span className="dsm-trae-model-copy">
+                                    <span className="dsm-trae-model-name">
+                                      {model.name}
+                                      {model.creditMultiplier === undefined ? null
+                                        : <span className="dsm-trae-model-name-rate">({model.creditMultiplier.toFixed(2)}x)</span>}
+                                    </span>
+                                    {requiresPlan
+                                      ? <span className="dsm-trae-model-plan-badge">{t('row.modelRequiresMembership')}</span>
+                                      : null}
+                                  </span>
                                 </label>
-                              <fieldset className="dsm-trae-context-budget" aria-label={t('row.contextBudget')}>
-                                {model.maxContextWindow !== undefined
-                                  ? <label>
-                                      <input
-                                        type="radio"
-                                        name={`context-${model.id}`}
-                                        checked={activeContextBudgets[model.id] !== model.maxContextWindow}
-                                        disabled={settingsScope?.getSnapshot().writable !== true || saving}
-                                        onChange={() => { setContextBudget(model.id, model.contextWindow) }}
-                                      />
-                                      <span>{formatCapacity(model.contextWindow, t('row.modelUnknown'))}</span>
-                                    </label>
-                                  : null}
-                                <label>
-                                  <input
-                                    type="radio"
-                                    name={`context-${model.id}`}
-                                    checked={model.maxContextWindow === undefined || activeContextBudgets[model.id] === model.maxContextWindow}
-                                    disabled={model.maxContextWindow === undefined || settingsScope?.getSnapshot().writable !== true || saving}
-                                    onChange={() => { setContextBudget(model.id, model.maxContextWindow) }}
-                                  />
-                                  <span>{formatCapacity(model.maxContextWindow ?? model.contextWindow, t('row.modelUnknown'))}</span>
-                                </label>
-                              </fieldset>
+                                <div className="dsm-trae-model-options">
+                                  <label className="dsm-trae-model-image">
+                                    <input
+                                      type="checkbox"
+                                      checked={activeImageIds.has(model.id)}
+                                      disabled={settingsScope?.getSnapshot().writable !== true || saving}
+                                      onChange={() => { toggleImage(model.id) }}
+                                    />
+                                    <span>{t('row.modelImage')}</span>
+                                  </label>
+                                  <fieldset className="dsm-trae-context-budget" aria-label={t('row.contextBudget')}>
+                                    {options.map(opt => (
+                                      <label key={opt}>
+                                        <input
+                                          type="radio"
+                                          name={`context-${model.id}`}
+                                          checked={currentBudget === opt}
+                                          disabled={settingsScope?.getSnapshot().writable !== true || saving}
+                                          onChange={() => { setContextBudget(model.id, opt === defaultBudget ? undefined : opt) }}
+                                        />
+                                        <span>{formatCapacity(opt, t('row.modelUnknown'))}</span>
+                                      </label>
+                                    ))}
+                                  </fieldset>
+                                </div>
+                              </div>
+                              <div className="dsm-trae-model-meta">
+                                <span>{t('row.modelContext', { context: formatCapacity(model.maxContextWindow ?? model.contextWindow, t('row.modelUnknown')) })}</span>
+                                {model.maxTokens === undefined ? null
+                                  : <span>{t('row.modelOutput', { output: formatCapacity(model.maxTokens, t('row.modelUnknown')) })}</span>}
+                                {model.reasoning === undefined ? null
+                                  : <span>{t('row.modelReasoning', { efforts: model.reasoning.supported.join(' / ') })}</span>}
                               </div>
                             </div>
-                            <div className="dsm-trae-model-meta">
-                              <span>{t('row.modelContext', { context: formatCapacity(model.maxContextWindow ?? model.contextWindow, t('row.modelUnknown')) })}</span>
-                              {model.maxTokens === undefined ? null
-                                : <span>{t('row.modelOutput', { output: formatCapacity(model.maxTokens, t('row.modelUnknown')) })}</span>}
-                              {model.reasoning === undefined ? null
-                                : <span>{t('row.modelReasoning', { efforts: model.reasoning.supported.join(' / ') })}</span>}
-                            </div>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                       <p className="dsm-trae-model-capability-note">{t('row.modelCapabilityPending')}</p>
                       <div className="dsm-trae-model-actions">

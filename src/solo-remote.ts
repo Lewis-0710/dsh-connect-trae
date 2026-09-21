@@ -64,12 +64,17 @@ export class TraeSoloRemoteCatalogClient {
     const json = await response.json() as { code?: number; data?: { list?: { function?: string; models?: unknown[] }[] } }
     const groups = json.data?.list ?? []
     const preferred = groups.find(group => group.function === 'solo_agent_remote') ?? groups[0]
-    const seen = new Set<string>()
+    const seenIds = new Set<string>()
+    const seenNames = new Set<string>()
     const models: TraeDiscoveredModel[] = []
     for (const raw of preferred?.models ?? []) {
       const model = parseTraeRemoteModel(raw)
-      if (model === undefined || seen.has(model.id)) continue
-      seen.add(model.id)
+      if (model === undefined) continue
+      const idKey = model.id.trim().toLowerCase()
+      const nameKey = model.name.trim().toLowerCase()
+      if (seenIds.has(idKey) || seenNames.has(nameKey)) continue
+      seenIds.add(idKey)
+      seenNames.add(nameKey)
       models.push(model)
     }
     if (models.length === 0) throw new Error('SOLO remote models response contained no models')

@@ -2,6 +2,9 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import type { TraeDiscoveredModel } from './model-metadata.ts'
+import { parseTraeRemoteModel } from './model-metadata.ts'
+import type { TraeRegion } from './region.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -59,6 +62,8 @@ export interface TraeCachedModelReadOptions {
  * secrets. The sqlite3 command line is a macOS prerequisite; on Windows it is
  * typically absent, so the call fails and callers fall back gracefully.
  */
+
+
 export async function readTraeCachedModel(
   functionName: string,
   modelName: string,
@@ -77,4 +82,64 @@ export async function readTraeCachedModel(
   const document = JSON.parse(stdout) as Record<string, unknown>
   const list = Array.isArray(document[functionName]) ? document[functionName] as unknown[] : []
   return parseTraeCachedModel(list.find(item => typeof item === 'object' && item !== null && (item as { name?: unknown }).name === modelName))
+}
+
+/**
+ * Read the full model catalogue cached in Trae's local SQLite database.
+ * This contains the active promotions, discount rates (e.g. 0.08x), and in-IDE
+ * model entries that might not yet be updated on the public Web API.
+ */
+export async function readTraeLocalCatalog(
+  region: TraeRegion = 'cn',
+  userId?: string,
+  options: TraeCachedModelReadOptions = {},
+): Promise<TraeDiscoveredModel[]> {
+  const platform = options.platform ?? process.platform
+  const home = options.home ?? homedir()
+  const env = options.env ?? process.env
+  const folderNames = region === 'ai'
+    ? ['Trae', 'Trae SG', 'Trae Solo']
+    : ['Trae CN', 'Trae', 'Trae Solo']
+
+  for (const folder of folderNames) {
+    const database = platform === 'win32'
+      ? join(env.APPDATA ?? join(home, 'AppData', 'Roaming'), folder, 'User', 'globalStorage', 'state.vscdb')
+      : platform === 'darwin'
+        ? join(home, 'Library', 'Application Support', folder, 'User', 'globalStorage', 'state.vscdb')
+        : join(home, '.config', folder, 'User', 'globalStorage', 'state.vscdb')
+
+    try {
+      const keyCondition = userId ? `key=${JSON.stringify(`${userId}_AI.agent.model.model_list_map`)}` : `key like '%AI.agent.model.model_list_map%'`
+      const sql = `select value from ItemTable where ${keyCondition} limit 1;`
+      const { stdout } = await execFileAsync('sqlite3', [database, sql], { maxBuffer: 8 * 1024 * 1024 })
+      if (!stdout.trim()) continue
+      const document = JSON.parse(stdout) as Record<string, unknown>
+      const candidateKeys = ['solo_agent', 'chat_v3', 'builder_v3', 'builder', 'code_review_summary']
+      const seenIds = new Set<string>()
+      const seenNames = new Set<string>()
+      const models: TraeDiscoveredModel[] = []
+      for (const key of candidateKeys) {
+        const list = Array.isArray(document[key]) ? document[key] as unknown[] : []
+        for (const raw of list) {
+          if (typeof raw !== 'object' || raw === null) continue
+          const name = (raw as { name?: unknown; model_name?: unknown }).name ?? (raw as { model_name?: unknown }).model_name
+          if (typeof name !== 'string' || name.startsWith('refactor_') || name === 'code-review-judge' || name.startsWith('custom_model')) {
+            continue
+          }
+          const model = parseTraeRemoteModel(raw)
+          if (model === undefined) continue
+          const idKey = model.id.trim().toLowerCase()
+          const nameKey = model.name.trim().toLowerCase()
+          if (seenIds.has(idKey) || seenNames.has(nameKey)) continue
+          seenIds.add(idKey)
+          seenNames.add(nameKey)
+          models.push(model)
+        }
+      }
+      if (models.length > 0) return models
+    } catch {
+      // Continue to try next candidate path or return empty
+    }
+  }
+  return []
 }

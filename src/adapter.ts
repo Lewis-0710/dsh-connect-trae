@@ -5,7 +5,7 @@ import { resolveRetryPolicy } from '@deepseek-ai/dsh-llm'
 import { PiAiAdapter } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { ResolvedPiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import { traeInputModalities, traeModelDisplayName, type TraeCatalog, type TraeModelInfo } from './catalog.ts'
+import { formatTraeModelDisplayName, traeInputModalities, type TraeCatalog, type TraeModelInfo } from './catalog.ts'
 import type { TraeShim } from './shim.ts'
 import type { TraeRegion } from './region.ts'
 
@@ -68,10 +68,11 @@ const REQUEST_IMAGE_BUDGETS = {
  */
 const FALLBACK_CONTEXT_WINDOW = 200_000
 
-function toPiModel(info: TraeModelInfo, baseUrl: string, providerId: string): Model<Api> {
+function toPiModel(info: TraeModelInfo, baseUrl: string, providerId: string = TRAE_PROVIDER): Model<Api> {
+  const displayName = formatTraeModelDisplayName(info)
   return {
     id: info.id,
-    name: traeModelDisplayName(info),
+    name: displayName,
     api: 'openai-completions',
     provider: providerId,
     baseUrl,
@@ -112,7 +113,7 @@ export interface TraeAdapter {
 
 export function createTraeAdapter(options: TraeAdapterOptions): TraeAdapter {
   const providerId = options.provider ?? TRAE_PROVIDER
-  const providerName = options.displayName ?? 'Trae'
+  const providerName = options.displayName ?? (providerId === TRAE_AI_PROVIDER ? 'Trae Global' : 'Trae')
   const buildModels = (): Model<Api>[] => options.catalog.current()
     .map(info => toPiModel(info, `${options.shim.baseUrl()}/v1`, providerId))
 

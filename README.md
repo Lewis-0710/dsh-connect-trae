@@ -1,3 +1,15 @@
+> [!NOTE]
+> **Fork 维护版本** | 本仓库是 [dingminhua/dsh-connect-trae](https://github.com/dingminhua/dsh-connect-trae) 的维护分支。
+> 
+> **与上游差异**：
+> 1. 入口与 Provider 分组名称统一定制为 `Trae` / `Trae Global`
+> 2. 支持识别受限模型并展示「会员计划」徽标与别名标识
+> 3. 模型别名展示倍率（如 `(0.77x)`），保持底层原始模型 ID 纯净
+> 4. 优化「恢复默认」与「从Trae刷新」逻辑（默认选中 $\ge 1\text{M}$ 上下文模型，自动匹配多模态与最大上下文大小）
+> 5. 增强配置持久化，保留倍率、最大上下文及会员限制等扩展元数据
+> 
+> 详见 [sync.patch](./sync.patch)。
+
 <p align="center">
   <img src="docs/assets/dsh-connect-trae-usage-card.png" width="860" alt="dsh-connect-trae settings panel" />
 </p>

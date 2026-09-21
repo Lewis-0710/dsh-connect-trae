@@ -36,4 +36,79 @@ describe('Trae remote model metadata', () => {
       id: 'm', name: 'm', multimodal: false, reasoningSupported: false,
     })
   })
+
+  it('parses requiresMembership when identity_list excludes free identity 0', () => {
+    expect(parseTraeRemoteModel({
+      name: 'Doubao-Seed-Evolving',
+      display_name: 'Seed-Evolving',
+      features: JSON.stringify({ access: { data: { identity_list: [1, 2, 3, 100] } } }),
+    })).toEqual(expect.objectContaining({
+      id: 'Doubao-Seed-Evolving',
+      requiresMembership: true,
+    }))
+
+    const normal = parseTraeRemoteModel({
+      name: 'glm-5.2',
+      display_name: 'GLM-5.2',
+      features: JSON.stringify({ access: { data: { identity_list: [0, 5, 1, 2, 3, 100] } } }),
+    })
+    expect(normal).toEqual(expect.objectContaining({ id: 'glm-5.2' }))
+    expect(normal?.requiresMembership).toBeUndefined()
+  })
+
+  it('parses features when provided directly as an object (state.vscdb format)', () => {
+    expect(parseTraeRemoteModel({
+      name: 'Doubao-Seed-Evolving',
+      display_name: 'Seed-Evolving',
+      features: { consumption_rate: { enable: true, data: { rate: 0.08 } }, reasoning: { enable: true }, multimodal: { enable: true } },
+    })).toEqual(expect.objectContaining({
+      id: 'Doubao-Seed-Evolving',
+      creditMultiplier: 0.08,
+      multimodal: true,
+      reasoningSupported: true,
+    }))
+  })
+
+  it('prefers active activity_discount over base consumption_rate', () => {
+    expect(parseTraeRemoteModel({
+      name: 'Doubao-Seed-Evolving',
+      display_name: 'Seed-Evolving',
+      features: {
+        activity_discount: {
+          enable: true,
+          data: { current: { consumption_rate: 0.08, discount_type: 'limited' } },
+        },
+        consumption_rate: { enable: true, data: { rate: 0.8 } },
+      },
+    })).toEqual(expect.objectContaining({
+      id: 'Doubao-Seed-Evolving',
+      creditMultiplier: 0.08,
+    }))
+  })
+
+  it('parses context window and max context from state.vscdb features and context_window_size', () => {
+    expect(parseTraeRemoteModel({
+      name: 'gemini-3.1-pro',
+      display_name: 'Gemini-3.1-Pro-Preview',
+      prompt_max_tokens: 168000,
+      context_window_size: { max: [1000000], default: 200000 },
+      features: {
+        context_windows: {
+          enable: true,
+          data: {
+            dev_context: 200000,
+            max_context: 1000000,
+            max_context_list: [1000000],
+            dev_turns: 200,
+            max_turns: 500,
+          },
+        },
+      },
+    })).toEqual(expect.objectContaining({
+      id: 'gemini-3.1-pro',
+      name: 'Gemini-3.1-Pro-Preview',
+      contextWindow: 200000,
+      maxContextWindow: 1000000,
+    }))
+  })
 })
