@@ -123,7 +123,7 @@ if [ -s "$TMP_DIR/sync.patch" ]; then
         cp "$TMP_DIR/sync.sh" "$SCRIPT_DIR/sync.sh"
         chmod +x "$SCRIPT_DIR/sync.sh"
         git add -A
-        git commit -m "sync: align with upstream/main $(date +%Y-%m-%d)" --quiet || true
+        git commit -m "sync: 与 upstream/main 同步 ($(date +%Y-%m-%d))" --quiet || true
         APPLIED_VIA_PATCH=true
         echo "   ✅ 策略 1 应用成功"
     else
@@ -142,7 +142,7 @@ if [ "$APPLIED_VIA_PATCH" = false ]; then
 
     if [ -z "$CONFLICTS" ]; then
         git add -A
-        git commit -m "merge: sync upstream/main $(date +%Y-%m-%d)" --quiet 2>/dev/null || true
+        git commit -m "merge: 合并 upstream/main ($(date +%Y-%m-%d))" --quiet 2>/dev/null || true
     else
         for f in $CONFLICTS; do
             case "$f" in
@@ -171,7 +171,7 @@ if [ "$APPLIED_VIA_PATCH" = false ]; then
             esac
         done
         git add -A
-        git commit -m "merge: sync upstream/main (smart merge, $(date +%Y-%m-%d))" --quiet 2>/dev/null || true
+        git commit -m "merge: 智能合并 upstream/main ($(date +%Y-%m-%d))" --quiet 2>/dev/null || true
         echo "   ✅ Smart Merge 完成"
     fi
 fi
@@ -192,7 +192,7 @@ echo "✅ sync.patch 生成完毕 (共 $PATCH_LINES 行，已排除同步脚本�
 git add sync.patch sync.sh
 
 if ! git diff --cached --quiet; then
-    git commit -m "chore: update sync.patch and sync.sh ($(date +%Y-%m-%d))" --quiet || true
+    git commit -m "chore: 更新 sync.patch 与 sync.sh 快照 ($(date +%Y-%m-%d))" --quiet || true
 fi
 
 # 自动测试与检查
@@ -223,7 +223,11 @@ fi
 
 if [ "$DO_PUSH" = true ]; then
     echo "🚀 正在推送到 origin/custom..."
-    git push origin custom
+    if [ "$APPLIED_VIA_PATCH" = true ]; then
+        git push --force-with-lease origin custom
+    else
+        git push origin custom
+    fi
     echo "✅ 已成功推送到 origin/custom"
 else
     echo "ℹ️  跳过远程推送（可稍后手动执行 git push origin custom）"
